@@ -1,0 +1,179 @@
+name: Build Executables
+
+on:
+  push:
+    # branches: [ main ]
+    # tags: [ 'v*' ]
+  pull_request:
+    # branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            asset_name: my-cli-linux
+          - os: windows-latest
+            asset_name: my-cli-windows
+          - os: macos-latest
+            asset_name: my-cli-macos
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install -e ".[build]"
+
+    # 创建构建配置文件
+    - name: Create build config
+      run: |
+        echo "ROOT_DIR = '${{ github.workspace }}'" > scripts/build_config.py
+        echo "TIMESTAMP = '2025-03-12 08:34:55'" >> scripts/build_config.py
+        echo "CURRENT_USER = 'lanseria'" >> scripts/build_config.py
+    
+    - name: Build with PyInstaller
+      run: python scripts/build.py
+      env:
+        PYTHONPATH: ${{ github.workspace }}
+        PYTHONIOENCODING: utf-8
+        PYTHONUTF8: 1
+
+    - name: Prepare artifact
+      shell: bash
+      run: |
+        mkdir -p dist/package
+        cp -r input output dist/package/ 2>/dev/null || :
+        
+        if [ "${{ matrix.os }}" = "windows-latest" ]; then
+          cd dist && tar czf ../${{ matrix.asset_name }}.tar.gz my-cli-windows.exe package/
+        else
+          chmod +x dist/my-cli-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'macos' }}
+          cd dist && tar czf ../${{ matrix.asset_name }}.tar.gz my-cli-* package/
+        fi
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: ${{ matrix.asset_name }}.tar.gz
+        retention-days: 7
+        compression-level: 9
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+    
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        merge-multiple: true
+    
+    - name: Get version from tag
+      id: get_version
+      run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+    
+    - name: Get current date
+      id: date
+      run: echo "DATE=$(date -u +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+      
+    - name: Get previous tag
+      id: previous_tag
+      run: |
+        git fetch --tags --force
+        TAGS=($(git tag --sort=-creatordate))
+        CURRENT_TAG="${{ github.ref_name }}"
+        
+        PREVIOUS_TAG=""
+        for ((i=0; i<${#TAGS[@]}; i++)); do
+          if [[ "${TAGS[i]}" == "$CURRENT_TAG" && $i -lt $((${#TAGS[@]}-1)) ]]; then
+            PREVIOUS_TAG="${TAGS[i+1]}"
+            break
+          fi
+        done
+
+        echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+
+    - name: Generate changelog
+      id: changelog
+      run: |
+        if [[ -z "$PREVIOUS_TAG" ]]; then
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "## 初始版本" >> $GITHUB_ENV
+          echo "- 首次发布" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        else
+          echo "CHANGELOG<<EOF" >> $GITHUB_ENV
+          echo "## 变更记录" >> $GITHUB_ENV
+          git log --pretty=format:"- %s [%h]" "$PREVIOUS_TAG"..$CURRENT_TAG >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        fi
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        name: Release ${{ github.ref_name }}
+        draft: false
+        prerelease: false
+        files: |
+          ./my-cli-linux.tar.gz
+          ./my-cli-windows.tar.gz
+          ./my-cli-macos.tar.gz
+        body: |
+          ## Captcha Verification CLI Tool v${{ steps.get_version.outputs.VERSION }}
+          
+          **发布日期:** ${{ steps.date.outputs.DATE }}
+          **构建提交:** ${{ github.sha }}
+          
+          ${{ env.CHANGELOG }}
+          
+          ### 安装指南
+          1. 下载对应操作系统的压缩包
+          2. 解压：
+            ```bash
+            # Linux/macOS
+            tar xzf my-cli-*.tar.gz
+            
+            # Windows
+            tar -xzf my-cli-windows.tar.gz
+            ```
+          3. 运行程序：
+             ```bash
+             # Linux/macOS
+             ./my-cli-linux --help
+             # 或
+             ./my-cli-macos --help
+             
+             # Windows
+             my-cli-windows.exe --help
+             ```
+          
+          ### SHA256 校验和
+          ```
+          ${{ hashFiles('*.tar.gz') }}
+          ```
+
+permissions:
+  contents: write
+  actions: read
