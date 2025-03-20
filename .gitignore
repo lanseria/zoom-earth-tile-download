@@ -28,7 +28,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-
+*.log
 # Directories
 input/
 output/
+mosaics/
