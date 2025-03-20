@@ -208,5 +208,6 @@ def concat_tiles(
             logging.error(f"处理失败 [{Path(path).name}]: {str(e)}")
 
     # 保存结果
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path, quality=95)
     logging.info(f"生成拼接图: {output_path}")

@@ -76,7 +76,7 @@ def process_concat(
 @app.command(name="process-api")
 def process_from_api(
     concurrency: int = typer.Option(
-        5, 
+        20, 
         "--concurrency", "-c",
         min=1, max=20,
         help="并发下载线程数 (1-20)"

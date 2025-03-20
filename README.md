@@ -41,6 +41,7 @@ pip install -e ".[test]"
 Add two numbers:
 ```bash
 zec process-api
+zec process-concat
 ```
 ## Running Tests
 
