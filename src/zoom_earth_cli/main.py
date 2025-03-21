@@ -4,7 +4,8 @@ from rich.panel import Panel
 import logging
 from pathlib import Path
 import traceback
-from zoom_earth_cli.utils import batch_download, concat_tiles, add_feather_alpha, smart_feather_alpha
+from zoom_earth_cli.api_client import batch_download
+from zoom_earth_cli.utils import concat_tiles, smart_feather_alpha
 from PIL import Image, ImageChops
 
 app = typer.Typer(help="Zoom Earth CLI")
@@ -21,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 @app.command(name="process-blend")
-def process_blend_new(): 
+def process_blend(): 
     # 输入文件列表
     paths = [
         "mosaics/goes-east/2025-03-21/0200.png",
@@ -34,11 +35,11 @@ def process_blend_new():
     # 每个卫星图的参数
     BOUNDARY_CONFIG = {
         "goes-east": {"left": 512, "right": 1921 },
-        "goes-west": {"left": 0, "right": 675},
+        "goes-west": {"left": 0, "right": 512},
         "himawari": {"left": 3008, "right": 4096},
-        "msg-iodc": {"left": 2432, "right": 3008},
-        "msg-zero": {"left": 1728, "right": 2496},
-        "mtg-zero": {"left": 1728, "right": 2496},
+        "msg-iodc": {"left": 2496, "right": 3008},
+        # "msg-zero": {"left": 1728, "right": 2496},
+        "mtg-zero": {"left": 1921, "right": 2496},
     }
     # 初始化合成画布（带透明通道）
     composite = Image.new("RGBA", (4096, 2048), (0, 0, 0, 0))
@@ -53,14 +54,14 @@ def process_blend_new():
                 left_margin=config["left"],
                 right_margin=config["right"],
                 feather_width=0,  # 可根据需要调整
-                debug=False,         # 启用调试模式
+                debug=True, # 启用调试模式
                 debug_dir=f"debug_output/"
             )
             # 使用"lighten"混合模式（取像素最大值）
             composite = ImageChops.lighter(composite, feathered.convert("RGBA"))
     
     # 最终保存为不透明格式
-    composite.convert("RGBA").save("combined_output.png")
+    composite.convert("RGBA").resize([8192, 4096]).save("combined_output.png")
 
 
 @app.command(name="process-concat")

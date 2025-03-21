@@ -1,16 +1,16 @@
 
 import logging
 import os
+import json
 from pathlib import Path
 import platform
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
 import numpy as np
-from datetime import datetime
+from typing import Dict, Set, Tuple
+from collections import defaultdict
 
-from zoom_earth_cli.api_client import get_latest_times, download_tile
+from zoom_earth_cli.const import X_RANGE, Y_RANGE, BLACKLIST_PATH
 
 def get_system_font():
     """获取系统默认字体"""
@@ -61,52 +61,48 @@ def draw_tile_info(draw, position, text, tile_size):
         font=font
     )
 
-def batch_download(concurrency: int = 5):
-    """批量下载主逻辑"""
-    latest_times: Dict = get_latest_times()
+def load_blacklist() -> Dict[str, Set[Tuple[int, int]]]:
+    """加载黑名单配置"""
+    if not os.path.exists(BLACKLIST_PATH):
+        return defaultdict(set)
     
-    if not latest_times:
-        logging.error("获取卫星时间数据失败")
-        return
+    try:
+        with open(BLACKLIST_PATH, 'r') as f:
+            raw = json.load(f)
+        blacklist = defaultdict(set)
+        for sat, coords in raw.items():
+            blacklist[sat] = {tuple(coord) for coord in coords}
+        return blacklist
+    except Exception as e:
+        logging.error(f"加载黑名单失败：{e}")
+        return defaultdict(set)
 
-    # 定义下载范围
-    x_range = range(4, 12)
-    y_range = range(0, 16)
+def get_tile_path(satellite: str, timestamp: str, x: int, y: int) -> str:
+    """生成图片存储路径（示例）"""
+    return f"tiles/{satellite}/{timestamp}/{x}_{y}.png"
 
-    for satellite, timestamp in latest_times.items():
-        logging.info(f"开始处理卫星: {satellite}")
-        
-        # 生成所有坐标组合
-        x_range = range(4, 12)
-        y_range = range(0, 16)
-        args = [(x, y) for x in x_range for y in y_range]
-        total = len(args)
-        
-        # 创建线程池
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            # 包装下载函数固定卫星和时间参数
-            download_func = partial(
-                download_tile,
-                satellite,
-                timestamp
-            )
-            
-            # 提交并发任务
-            results = executor.map(
-                lambda params: download_func(params[0], params[1]),
-                args
-            )
-            
-            # 统计结果
-            success = sum(results)
-            skipped = total - success
+def generate_black_tile(satellite: str, timestamp: str, x: int, y: int):
+    """生成全黑图片并保存"""
+    path = get_tile_path(satellite, timestamp, x, y)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    try:
+        img = Image.new('RGB', (256, 256), (0, 0, 0))
+        img.save(path)
+        logging.debug(f"生成全黑图片：{path}")
+    except Exception as e:
+        logging.error(f"生成全黑图片失败：{path}, 错误：{e}")
 
-        logging.info(
-            f"完成 {satellite} - "
-            f"成功: {success}/{total} "
-            f"({success/total:.1%}) 失败: {skipped}"
-        )
-
+def save_blacklist(blacklist: Dict[str, Set[Tuple[int, int]]]):
+    """保存黑名单配置"""
+    serializable = {
+        sat: [list(coord) for coord in coords]
+        for sat, coords in blacklist.items()
+    }
+    try:
+        with open(BLACKLIST_PATH, 'w') as f:
+            json.dump(serializable, f, indent=2)
+    except Exception as e:
+        logging.error(f"保存黑名单失败：{e}")
 
 def validate_coordinates(filename: str) -> tuple:
     """解析文件名中的坐标"""
@@ -132,6 +128,7 @@ def concat_tiles(
     if rotate_deg not in valid_deg:
         raise ValueError(f"无效旋转角度，可选值：{valid_deg}")
 
+    # 生成瓦片坐标映射（基于预定义范围）
     # 收集瓦片并解析坐标
     coord_map = {}
     for tile_file in tile_dir.glob("x*_y*.jpg"):
@@ -251,7 +248,6 @@ def add_feather_alpha(img, feather_width=100, black_threshold=10, debug=True):
         preview.save(f"{debug_dir}/final_preview.png")
     return Image.fromarray(data)
 
-
 def smart_feather_alpha(img, left_margin, right_margin, feather_width=150, debug=False, debug_dir=""):
     # 将图像转换为RGBA模式，确保包含Alpha通道
     img_rgba = img.convert("RGBA")
@@ -301,7 +297,7 @@ def smart_feather_alpha(img, left_margin, right_margin, feather_width=150, debug
     
     if debug:
         os.makedirs(debug_dir, exist_ok=True)
-        debug_filename = f"feathered_{os.path.basename(img.filename)}"
+        debug_filename = f"feathered_{W}_{os.path.basename(img.filename)}"
         debug_path = os.path.join(debug_dir, debug_filename)
         img_rgba.save(debug_path)
         print(f"Debug image saved to: {debug_path}")
