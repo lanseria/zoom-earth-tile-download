@@ -65,6 +65,3 @@ sudo apt-get install binutils
 - rich
 
 ## AI Prompt
-
-如果将一张图，用 python 将其围绕中心点旋转任意角度，可以得到一个新的图像。
-但反过来，如何我已经有一旋转的图，与原图，如何获得旋转角度？使用python能不能解决这个问题？
