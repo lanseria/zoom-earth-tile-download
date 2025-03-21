@@ -65,3 +65,13 @@ sudo apt-get install binutils
 - rich
 
 ## AI Prompt
+
+我有这么几张图
+- mosaics/goes-east/2025-03-21/0200.png
+- mosaics/goes-west/2025-03-21/0200.png
+- mosaics/himawari/2025-03-21/0130.png
+- mosaics/msg-iodc/2025-03-21/0145.png
+- mosaics/msg-zero/2025-03-21/0145.png
+- mosaics/mtg-zero/2025-03-21/0150.png
+他们都是 4096 * 2048 的图片，
+将他们叠放在一起，并都使用 "明亮" 的效果，生成一张新的 4096 * 2048 图片

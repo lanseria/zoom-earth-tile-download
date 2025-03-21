@@ -1,11 +1,14 @@
 
 import logging
+import os
 from pathlib import Path
 import platform
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
+import numpy as np
+from datetime import datetime
 
 from zoom_earth_cli.api_client import get_latest_times, download_tile
 
@@ -211,3 +214,96 @@ def concat_tiles(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path, quality=95)
     logging.info(f"生成拼接图: {output_path}")
+
+def add_feather_alpha(img, feather_width=100, black_threshold=10, debug=True):
+    """为图像添加透明度通道和羽化效果"""
+    # 转换为RGBA模式
+    img = img.convert("RGBA")
+    data = np.array(img)
+    height, width = img.height, img.width  # 注意这里的顺序是(height, width)
+    
+    # 创建基础Alpha通道（非黑色区域不透明）
+    r, g, b, a = data.T  # 这里转置后维度变为 (channels, height, width)
+    black_mask = (r <= black_threshold) & (g <= black_threshold) & (b <= black_threshold)
+    alpha = np.where(black_mask, 0, 255).astype(np.uint8).T  # 需要再次转置回(height, width)
+    
+    # 生成水平羽化渐变（修正维度顺序）
+    feather = np.ones((height, width), dtype=np.float32)  # 使用(height, width)顺序
+    
+    # 左侧渐变（0 → 1）
+    feather[:, :feather_width] = np.linspace(0, 1, feather_width)
+    # 右侧渐变（1 → 0）
+    feather[:, -feather_width:] = np.linspace(1, 0, feather_width)
+    
+    # 应用羽化到Alpha通道（现在两个数组维度一致）
+    alpha = (alpha.astype(np.float32) * feather).clip(0, 255).astype(np.uint8)
+    
+    data[..., 3] = alpha
+    # 调试输出
+    if debug:
+        # 保存各阶段结果
+        debug_dir = "debug_output"
+        os.makedirs(debug_dir, exist_ok=True)
+        # 保存羽化蒙版
+        Image.fromarray((feather*255).astype(np.uint8)).save(f"{debug_dir}/feather_mask.png")
+        # 保存最终效果
+        preview = Image.alpha_composite(img.convert("RGBA"), Image.fromarray(data))
+        preview.save(f"{debug_dir}/final_preview.png")
+    return Image.fromarray(data)
+
+
+def smart_feather_alpha(img, left_margin, right_margin, feather_width=150, debug=False, debug_dir=""):
+    # 将图像转换为RGBA模式，确保包含Alpha通道
+    img_rgba = img.convert("RGBA")
+    width, height = img_rgba.size
+    
+    # 初始化Alpha通道为全透明
+    alpha = np.zeros((height, width), dtype=np.uint8)
+    
+    left = left_margin
+    right = right_margin
+    W = right - left  # 保留区域宽度
+    
+    if W > 0:
+        if W >= 2 * feather_width:
+            # 保留区域足够宽，应用标准羽化
+            left_end = left + feather_width
+            right_start = right - feather_width
+        else:
+            # 保留区域较窄，调整羽化宽度为一半
+            left_end = left + W // 2
+            right_start = right - W // 2
+        
+        # 确保羽化边界有效
+        left_end = min(left_end, right)
+        right_start = max(right_start, left)
+        
+        x = np.arange(width)
+        
+        # 处理左侧羽化区域
+        mask_left = (x >= left) & (x < left_end)
+        if left_end > left:
+            alpha_left = ((x[mask_left] - left) / (left_end - left) * 255).astype(np.uint8)
+            alpha[:, mask_left] = alpha_left
+        
+        # 处理中间不透明区域
+        mask_mid = (x >= left_end) & (x < right_start)
+        alpha[:, mask_mid] = 255
+        
+        # 处理右侧羽化区域
+        mask_right = (x >= right_start) & (x < right)
+        if right_start < right:
+            alpha_right = ((right - x[mask_right]) / (right - right_start) * 255).astype(np.uint8)
+            alpha[:, mask_right] = alpha_right
+    
+    # 应用Alpha通道到图像
+    img_rgba.putalpha(Image.fromarray(alpha, mode='L'))
+    
+    if debug:
+        os.makedirs(debug_dir, exist_ok=True)
+        debug_filename = f"feathered_{os.path.basename(img.filename)}"
+        debug_path = os.path.join(debug_dir, debug_filename)
+        img_rgba.save(debug_path)
+        print(f"Debug image saved to: {debug_path}")
+    
+    return img_rgba
