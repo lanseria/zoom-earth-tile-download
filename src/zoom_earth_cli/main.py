@@ -21,27 +21,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 @app.command(name="process-blend")
-def process_blend(): 
-    # 输入文件列表
-    paths = [
-        "mosaics/goes-east/2025-03-21/0200.png",
-        "mosaics/goes-west/2025-03-21/0200.png",
-        "mosaics/himawari/2025-03-21/0130.png",
-        "mosaics/msg-iodc/2025-03-21/0145.png",
-        "mosaics/msg-zero/2025-03-21/0145.png",
-        "mosaics/mtg-zero/2025-03-21/0150.png"
-    ]
-    # 创建空白画布（初始为全黑）
-    composite = Image.new("RGB", (4096, 2048))
-    
-    for path in paths:
-        with Image.open(path) as img:
-            # 使用"lighten"混合模式（取像素最大值）
-            composite = ImageChops.lighter(composite, img.convert("RGB"))
-    
-    composite.save("combined_output.png")
-
-@app.command(name="process-blend-new")
 def process_blend_new(): 
     # 输入文件列表
     paths = [
@@ -81,7 +60,7 @@ def process_blend_new():
             composite = ImageChops.lighter(composite, feathered.convert("RGBA"))
     
     # 最终保存为不透明格式
-    composite.convert("RGBA").save("combined_output_new.png")
+    composite.convert("RGBA").save("combined_output.png")
 
 
 @app.command(name="process-concat")
