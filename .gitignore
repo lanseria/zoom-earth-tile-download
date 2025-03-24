@@ -34,4 +34,6 @@ input/
 output/
 mosaics/
 debug_output/
+tiles/
+output_videos/
 combined_output.png

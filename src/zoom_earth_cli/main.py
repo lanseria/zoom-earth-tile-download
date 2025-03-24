@@ -3,10 +3,15 @@ from rich import print
 from rich.panel import Panel
 import logging
 from pathlib import Path
+from typing import List
 import traceback
+from datetime import datetime
+from PIL import Image, ImageChops
+
+from zoom_earth_cli.ffmpeg import generate_timelapse
 from zoom_earth_cli.api_client import batch_download
 from zoom_earth_cli.utils import concat_tiles, smart_feather_alpha
-from PIL import Image, ImageChops
+
 
 app = typer.Typer(help="Zoom Earth CLI")
 
@@ -20,6 +25,48 @@ logging.basicConfig(
     ]
 )
 logger = logging.getLogger(__name__)
+
+
+@app.command(name="process-video")
+def process_video(
+    input_dir: str = typer.Option(
+        ...,
+        "--input", "-i",
+        help="原始卫星图像目录路径",
+        exists=True,
+        file_okay=False,
+        dir_okay=True
+    ),
+    duration: int = typer.Option(
+        24,
+        "--duration", "-d",
+        min=1,
+        help="视频时间跨度（小时）"
+    )
+):
+    """生成卫星延时视频（自动命名输出文件）"""
+    try:
+        # 生成带时间戳的输出文件名
+        output_dir = Path("output_videos")
+        output_dir.mkdir(exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_file = output_dir / f"timelapse_{timestamp}.mp4"
+
+        # 调用生成逻辑
+        generate_timelapse(
+            input_dir=input_dir,
+            output_file=str(output_file),
+            duration_hours=duration,
+            start_time=None,    # 自动获取最新时间
+            framerate=30        # 固定默认帧率
+        )
+
+        typer.echo(f"\n[成功] 视频已生成至: {output_file}", err=True)
+        
+    except Exception as e:
+        typer.secho(f"生成失败: {str(e)}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
 
 @app.command(name="process-blend")
 def process_blend(): 
@@ -124,17 +171,33 @@ def process_from_api(
         "--concurrency", "-c",
         min=1, max=20,
         help="并发下载线程数 (1-20)"
+    ),
+    satellites: List[str] = typer.Option(
+        None,
+        "--satellites", "-s",
+        help="选择卫星列表（空格分隔），例如 goes-east goes-west himawari, msg-iodc, msg-zero, mtg-zer, 默认全部卫星"
+    ),
+    hours: int = typer.Option(
+        1,
+        "--hours", "-h", 
+        min=0,
+        help="仅下载最新N小时内的数据（0表示不限制），默认1小时"
     )
 ):
-    """主流程"""
+    """主流程（支持卫星选择和时间过滤）"""
     try:
-        logger.info(f"启动下载任务，并发数: {concurrency}")
-        batch_download(concurrency=concurrency)
+        logger.info(f"启动下载任务 | 并发数: {concurrency} | 卫星: {satellites or '全部'} | 时间范围: {hours}小时")
+        batch_download(
+            concurrency=concurrency,
+            satellites=satellites,
+            hours=hours
+        )
         print(Panel("[bold green]所有任务完成![/]", title="完成通知"))
     except Exception as e:
         logger.error(f"严重错误: {str(e)}")
         logger.debug(traceback.format_exc())
         print(Panel(f"[bold red]API 处理错误: {str(e)}[/]", title="严重错误"))
+
 
 @app.command(name="legacy-process-api")
 def legacy_process_from_api():

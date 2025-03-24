@@ -1,8 +1,11 @@
 import os
+import json
 import logging
 import requests
+import time
+from pprint import pprint
 from datetime import datetime, timezone
-from typing import Tuple
+from typing import Tuple, Optional, List
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
 
@@ -30,8 +33,12 @@ headers = {
     'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
 }
 
-def get_latest_times():
-    """获取各卫星最新时间戳"""
+def get_latest_times(hours: int = 1):
+    """获取各卫星最新时间戳（支持时间范围过滤）
+    
+    Args:
+        hours: 仅保留最近N小时内的数据（0表示不限制），默认1小时
+    """
     url = "https://tiles.zoom.earth/times/geocolor.json"
     try:
         logger.debug(f"开始获取卫星时间数据: {url}")
@@ -39,9 +46,43 @@ def get_latest_times():
         response.raise_for_status()
         
         data = response.json()
-        result = {sat: max(times) for sat, times in data.items()}
-        logger.info(f"成功获取 {len(data)} 个卫星的时间数据")
+        
+        # 生成带时间戳的文件名
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"./debug_output/satellite_times_{timestamp}.json"
+        
+        # 创建目录（如果不存在）
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        
+        # 保存原始数据（不经过滤）
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"原始时间数据已保存至 {filename}")
+        except IOError as e:
+            logger.error(f"保存时间数据文件失败: {str(e)}", exc_info=True)
+        
+        # 处理时间数据
+        current_time = time.time()
+        result = {}
+        
+        for satellite, timestamps in data.items():
+            # 时间范围过滤
+            if hours > 0:
+                valid_times = [ts for ts in timestamps 
+                              if (current_time - ts) <= hours * 3600]
+                if not valid_times:
+                    logger.warning(f"卫星 {satellite} 无有效数据（最新数据 {round((current_time - max(timestamps))/3600,1)} 小时前）")
+                    continue
+                latest = valid_times
+            else:
+                latest = timestamps
+            
+            result[satellite] = latest
+        
+        logger.info(f"成功处理 {len(result)}/{len(data)} 个卫星（{hours}小时过滤）")
         return result
+
     except requests.exceptions.RequestException as e:
         logger.error(
             f"获取卫星时间失败 - URL: {url} | 状态码: {getattr(e.response, 'status_code', 'N/A')}",
@@ -98,56 +139,101 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int) -> Tuple[bool,
         logger.error(f"未知错误: {str(e)}", exc_info=True)
         return (False, False)
 
-def batch_download(concurrency: int = 5):
-    """批量下载主逻辑（包含黑名单过滤）"""
-    latest_times = get_latest_times()
+def batch_download(
+        concurrency: int = 5,
+        satellites: Optional[List[str]] = None,
+        hours: int = 1
+    ):
+    """批量下载主逻辑（包含黑名单过滤）
+    
+    Args:
+        concurrency: 并发线程数，默认5
+        satellites: 要处理的卫星列表，默认全部（包含 goes-east, goes-west, himawari, msg-iodc, msg-zero, mtg-zero）
+        hours: 仅处理最新N小时内的数据，0表示不限制，默认1小时
+    """
+    # 设置卫星默认值
+    if satellites is None:
+        satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
+    
+    latest_times = get_latest_times(hours=hours)
     if not latest_times:
         logging.error("获取卫星时间数据失败")
         return
+
+    # pprint(latest_times)
+    # 卫星过滤
+    filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
+    pprint(filtered_times)
+    # return
 
     blacklist = load_blacklist()
     x_range = X_RANGE
     y_range = Y_RANGE
 
-    for satellite, timestamp in latest_times.items():
-        logging.info(f"开始处理卫星: {satellite}")
+    for satellite, timestamps in filtered_times.items():
+        logging.info(f"开始处理卫星: {satellite}，共有 {len(timestamps)} 个时间点")
         
-        # 生成所有区域并分割
-        all_coords = [(x, y) for x in x_range for y in y_range]
-        total_all = len(all_coords)
-        skip_coords = {(x, y) for x, y in all_coords if (x, y) in blacklist[satellite]}
-        download_coords = [c for c in all_coords if c not in skip_coords]
+        # 初始化卫星级统计
+        sat_total = 0
+        sat_success = 0
+        sat_skipped = 0
+        sat_failed = 0
+        sat_new_black = 0
         
-        # 处理已跳过的区域
-        for x, y in skip_coords:
-            generate_black_tile(satellite, timestamp, x, y)
-        
-        # 提交下载任务
-        total_download = len(download_coords)
-        if total_download == 0:
-            logging.info(f"卫星 {satellite} 无需要下载的区域，跳过。")
-            continue
+        # 遍历每个时间戳
+        for timestamp in timestamps:
+            logging.info(f"处理时间点: {datetime.fromtimestamp(timestamp):%Y-%m-%d %H:%M}")
             
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            download_func = partial(download_tile, satellite, timestamp)
-            results = list(executor.map(lambda c: download_func(c[0], c[1]), download_coords))
+            # 生成所有区域并分割
+            all_coords = [(x, y) for x in x_range for y in y_range]
+            total_all = len(all_coords)
+            skip_coords = {(x, y) for x, y in all_coords if (x, y) in blacklist.get(satellite, set())}
+            download_coords = [c for c in all_coords if c not in skip_coords]
+            
+            # 处理已跳过的区域
+            for x, y in skip_coords:
+                generate_black_tile(satellite, timestamp, x, y)
+            
+            # 提交下载任务
+            total_download = len(download_coords)
+            if total_download == 0:
+                logging.info(f"时间点 {timestamp} 无需要下载的区域")
+                continue
+                
+            with ThreadPoolExecutor(max_workers=concurrency) as executor:
+                download_func = partial(download_tile, satellite, timestamp)
+                results = list(executor.map(lambda c: download_func(c[0], c[1]), download_coords))
+            
+            # 解析当前时间点结果
+            success_count = sum(succ for succ, _ in results)
+            new_black_coords = [download_coords[i] for i, (_, is_blk) in enumerate(results) if is_blk]
+            
+            # 更新黑名单
+            if new_black_coords:
+                blacklist[satellite].update(new_black_coords)
+                save_blacklist(blacklist)
+            
+            # 统计当前时间点
+            current_skipped = len(skip_coords) + len(new_black_coords)
+            current_failed = total_download - success_count
+            
+            logging.info(
+                f"时间点完成 - 总数: {total_all}\n"
+                f"成功: {success_count} | 跳过: {current_skipped} | 失败: {current_failed}\n"
+                f"新增黑名单: {len(new_black_coords)}"
+            )
+            
+            # 累加卫星级统计
+            sat_total += total_all
+            sat_success += success_count
+            sat_skipped += current_skipped
+            sat_failed += current_failed
+            sat_new_black += len(new_black_coords)
         
-        # 解析结果
-        success_count = sum(succ for succ, _ in results)
-        new_black_coords = [download_coords[i] for i, (_, is_blk) in enumerate(results) if is_blk]
-        
-        # 更新黑名单
-        if new_black_coords:
-            blacklist[satellite].update(new_black_coords)
-            save_blacklist(blacklist)
-        
-        # 统计信息
-        effective_success = success_count - len(new_black_coords)
-        skipped_count = len(skip_coords) + len(new_black_coords)
-        failed_count = total_download - success_count
-        
+        # 输出卫星汇总日志
         logging.info(
-            f"完成 {satellite} - 总数: {total_all}\n"
-            f"成功: {effective_success} | 跳过: {skipped_count} | 失败: {failed_count}\n"
-            f"新增黑名单: {len(new_black_coords)}"
+            f"卫星 {satellite} 汇总 - 总处理时间点: {len(timestamps)}\n"
+            f"总计成功: {sat_success} | 总计跳过: {sat_skipped} | 总计失败: {sat_failed}\n"
+            f"总新增黑名单: {sat_new_black}"
         )
+

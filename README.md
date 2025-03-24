@@ -42,6 +42,7 @@ Add two numbers:
 ```bash
 zec process-api
 zec process-concat
+zec process-video -i mosaics/himawari
 ```
 ## Running Tests
 
@@ -81,3 +82,10 @@ sudo apt-get install binutils
 ### 2
 
 给这个方法添加一个 过滤器，用来判断某个卫星对应的xy区域是不用下载的，当然一次是空的，每次下载图片时，通过判断文件大小，小于0.2KB的将当作全黑图片，记录在 一个 配置文件里，下次再次下载前，先读取这个文件，当遇到需要下载全黑图片时，就不下载直接自己生成256*256的全黑图片用来替换，避免过度下载，注意，生成这个配置文件仅当配置文件不存在时，去记录生成
+
+### 3 
+
+给这个方法添加一个两个参数
+
+- 选择哪个卫星，默认全部 有 goes-east, goes-west, himawari, msg-iodc, msg-zero, mtg-zero
+- 选择哪个最新几小时内，默认最新的 1 小时,
