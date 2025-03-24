@@ -3,9 +3,9 @@ from rich import print
 from rich.panel import Panel
 import logging
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import traceback
-from datetime import datetime
+from datetime import datetime, timezone
 from PIL import Image, ImageChops
 
 from zoom_earth_cli.ffmpeg import generate_timelapse
@@ -116,14 +116,18 @@ def process_concat(
     input_dir: str = typer.Option("downloads", help="原始瓦片目录"),
     output_dir: str = typer.Option("mosaics", help="拼接结果目录"),
     tile_size: int = typer.Option(256, min=128, max=512, help="瓦片像素尺寸"),
-    rotate: int = typer.Option(
-        0,
-        help="瓦片旋转角度 (0/90/180/270)"
+    rotate: int = typer.Option(0, help="瓦片旋转角度 (0/90/180/270)"),
+    show_coords: bool = typer.Option(False, "--show-coords/--no-coords", help="是否显示瓦片坐标信息"),
+    satellites: Optional[List[str]] = typer.Option(
+        None,
+        "--satellites", "-s",
+        help="选择卫星列表（空格分隔），例如 goes-east goes-west himawari，默认全部卫星"
     ),
-    show_coords: bool = typer.Option(
-        False,
-        "--show-coords/--no-coords",
-        help="是否显示瓦片坐标信息"
+    hours: int = typer.Option(
+        1,
+        "--hours", "-h", 
+        min=0,
+        help="仅处理最新N小时内的数据（0表示不限制），默认1小时"
     ),
 ):
     """
@@ -136,26 +140,58 @@ def process_concat(
         logger.error("输入目录不存在")
         raise typer.Exit(code=1)
 
+    # 获取当前UTC时间
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    
     # 遍历目录结构：卫星/日期/时间
     for satellite in base_path.iterdir():
+        # 过滤非目录和不在列表中的卫星
         if not satellite.is_dir():
             continue
-            
+        if satellites and satellite.name not in satellites:
+            logger.debug(f"跳过非指定卫星: {satellite.name}")
+            continue
+
+        # 遍历日期目录
         for date_dir in satellite.glob("*"):
             if not date_dir.is_dir():
                 continue
-                
+
+            # 遍历时间目录
             for time_dir in date_dir.glob("*"):
                 if not time_dir.is_dir():
                     continue
-                
+
+                # 处理时间范围过滤
+                if hours > 0:
+                    try:
+                        # 解析日期和时间（目录格式为 2025-03-20 和 1130）
+                        dt = datetime.strptime(
+                            f"{date_dir.name}{time_dir.name}", 
+                            "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
+                        )
+                    except ValueError as e:
+                        logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
+                        continue
+
+                    # 计算时间差（UTC 时间）
+                    time_diff = now_utc - dt
+                    if time_diff.total_seconds() > hours * 3600:
+                        logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
+                        continue
+
                 # 生成输出路径
-                output_path = Path(output_dir) / satellite.name / date_dir.name / f"{time_dir.name}.png"
+                output_path = (
+                    Path(output_dir) 
+                    / satellite.name 
+                    / date_dir.name 
+                    / f"{time_dir.name}.png"
+                )
                 
                 # 执行拼接
                 concat_tiles(
                     tile_dir=time_dir,
-                    output_path=output_path,
+                    output_path=output_path,  # type: ignore
                     tile_size=tile_size,
                     rotate_deg=rotate,
                     show_coords=show_coords

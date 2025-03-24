@@ -163,7 +163,7 @@ def batch_download(
     # pprint(latest_times)
     # 卫星过滤
     filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
-    pprint(filtered_times)
+    # pprint(filtered_times)
     # return
 
     blacklist = load_blacklist()

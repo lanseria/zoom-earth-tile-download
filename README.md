@@ -41,7 +41,9 @@ pip install -e ".[test]"
 Add two numbers:
 ```bash
 zec process-api
+zec process-api -s himawari -h 24
 zec process-concat
+zec process-concat -s himawari -h 24
 zec process-video -i mosaics/himawari
 ```
 ## Running Tests
