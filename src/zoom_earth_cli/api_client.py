@@ -108,6 +108,12 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int) -> Tuple[bool,
         save_dir = os.path.join("downloads", satellite, date_str, time_str)
         os.makedirs(save_dir, exist_ok=True)
         filename = os.path.join(save_dir, f"x{x}_y{y}.jpg")
+        
+        # 检查文件是否已存在
+        if os.path.exists(filename):
+            logger.info(f"文件已存在，跳过下载: {filename}")
+            return (True, False)
+            
         logger.debug(f"开始下载贴图: {url}")
 
         # 下载到临时文件（避免部分写入）
@@ -234,7 +240,31 @@ def batch_download(
         blacklist.setdefault(sat, set()).update(new_black[sat])
     save_blacklist(blacklist)
 
-    # 阶段4: 生成统计报告
+    # 阶段4: 失败任务重试
+    failed_tasks = []
+    for satellite, timestamp, success, is_black, x, y in results:
+        if not success:
+            failed_tasks.append((satellite, timestamp, x, y))
+    
+    # 重试失败的任务
+    if failed_tasks:
+        logging.info(f"\n开始重试 {len(failed_tasks)} 个失败任务...")
+        retry_results = []
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = [executor.submit(_download_wrapper, task) for task in failed_tasks]
+            for future in as_completed(futures):
+                retry_results.append(future.result())
+        
+        # 更新重试结果
+        for satellite, timestamp, success, is_black, x, y in retry_results:
+            if success:
+                result_stats[satellite][timestamp]['success'] += 1
+                result_stats[satellite][timestamp]['failed'] -= 1
+                if is_black:
+                    new_black[satellite].add((x, y))
+                    result_stats[satellite][timestamp]['new_black'] += 1
+
+    # 阶段5: 生成统计报告
     for satellite in filtered_times:
         sat_total = sat_success = sat_skipped = sat_failed = sat_new_black = 0
         
@@ -243,13 +273,6 @@ def batch_download(
             pre = pre_stats[satellite][timestamp]
             # 获取结果数据
             res = result_stats[satellite][timestamp]
-            
-            # 生成时间点日志
-            time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
-            logging.info(f"\n卫星 {satellite} 时间点 {time_str}:")
-            logging.info(f"总区域数: {pre['total']}")
-            logging.info(f"成功: {res.get('success',0)} | 跳过: {pre['skipped']} | 失败: {res.get('failed',0)}")
-            logging.info(f"新增黑名单: {res.get('new_black',0)}")
             
             # 累加卫星统计
             sat_total += pre['total']
@@ -264,3 +287,5 @@ def batch_download(
         logging.info(f"总处理区域: {sat_total}")
         logging.info(f"成功率: {sat_success/(sat_total - sat_skipped)*100:.1f}% [成功{sat_success}/尝试{sat_total - sat_skipped}]")
         logging.info(f"新增黑名单数: {sat_new_black}")
+        if sat_failed > 0:
+            logging.info(f"失败任务数: {sat_failed} (已重试)")

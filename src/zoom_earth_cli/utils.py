@@ -123,6 +123,10 @@ def concat_tiles(
     swap_xy: bool = True  # 新增坐标轴交换参数
 ):
     """拼接卫星图片（支持旋转）"""
+    # 如果输出文件已存在则跳过拼接
+    if output_path.exists():
+        logging.info(f"拼接图已存在，跳过: {output_path}")
+        return
     # 验证旋转角度有效性
     valid_deg = {0, 90, 180, 270}
     if rotate_deg not in valid_deg:
