@@ -7,7 +7,8 @@ from pprint import pprint
 from datetime import datetime, timezone
 from typing import Tuple, Optional, List
 from functools import partial
-from concurrent.futures import ThreadPoolExecutor
+from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist
 from zoom_earth_cli.const import X_RANGE, Y_RANGE
@@ -144,96 +145,122 @@ def batch_download(
         satellites: Optional[List[str]] = None,
         hours: int = 1
     ):
-    """批量下载主逻辑（包含黑名单过滤）
+    """批量下载主逻辑（包含黑名单过滤）优化版
     
     Args:
         concurrency: 并发线程数，默认5
-        satellites: 要处理的卫星列表，默认全部（包含 goes-east, goes-west, himawari, msg-iodc, msg-zero, mtg-zero）
-        hours: 仅处理最新N小时内的数据，0表示不限制，默认1小时
+        satellites: 要处理的卫星列表，默认全部
+        hours: 仅处理最新N小时内的数据，0表示不限制
     """
     # 设置卫星默认值
     if satellites is None:
         satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
-    
+
+    # 获取时间数据并过滤卫星
     latest_times = get_latest_times(hours=hours)
     if not latest_times:
         logging.error("获取卫星时间数据失败")
         return
-
-    # pprint(latest_times)
-    # 卫星过滤
+    
     filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
-    # pprint(filtered_times)
-    # return
-
     blacklist = load_blacklist()
     x_range = X_RANGE
     y_range = Y_RANGE
 
-    for satellite, timestamps in filtered_times.items():
-        logging.info(f"开始处理卫星: {satellite}，共有 {len(timestamps)} 个时间点")
+    # 阶段1: 预生成所有任务并处理黑瓷砖
+    tasks = []
+    pre_stats = defaultdict(lambda: defaultdict(dict))  # 记录预处理统计数据
+    
+    for satellite in filtered_times:
+        # 初始化卫星统计
+        pre_stats[satellite] = {}
         
-        # 初始化卫星级统计
-        sat_total = 0
-        sat_success = 0
-        sat_skipped = 0
-        sat_failed = 0
-        sat_new_black = 0
-        
-        # 遍历每个时间戳
-        for timestamp in timestamps:
-            logging.info(f"处理时间点: {datetime.fromtimestamp(timestamp):%Y-%m-%d %H:%M}")
-            
-            # 生成所有区域并分割
+        for timestamp in filtered_times[satellite]:
+            # 生成所有坐标并过滤黑名单
             all_coords = [(x, y) for x in x_range for y in y_range]
-            total_all = len(all_coords)
             skip_coords = {(x, y) for x, y in all_coords if (x, y) in blacklist.get(satellite, set())}
-            download_coords = [c for c in all_coords if c not in skip_coords]
             
-            # 处理已跳过的区域
+            # 生成黑瓷砖
             for x, y in skip_coords:
                 generate_black_tile(satellite, timestamp, x, y)
             
-            # 提交下载任务
-            total_download = len(download_coords)
-            if total_download == 0:
-                logging.info(f"时间点 {timestamp} 无需要下载的区域")
-                continue
-                
-            with ThreadPoolExecutor(max_workers=concurrency) as executor:
-                download_func = partial(download_tile, satellite, timestamp)
-                results = list(executor.map(lambda c: download_func(c[0], c[1]), download_coords))
+            # 记录预处理数据
+            download_coords = [c for c in all_coords if c not in skip_coords]
+            pre_stats[satellite][timestamp] = {
+                'total': len(all_coords),
+                'skipped': len(skip_coords),
+                'downloaded': len(download_coords)
+            }
             
-            # 解析当前时间点结果
-            success_count = sum(succ for succ, _ in results)
-            new_black_coords = [download_coords[i] for i, (_, is_blk) in enumerate(results) if is_blk]
-            
-            # 更新黑名单
-            if new_black_coords:
-                blacklist[satellite].update(new_black_coords)
-                save_blacklist(blacklist)
-            
-            # 统计当前时间点
-            current_skipped = len(skip_coords) + len(new_black_coords)
-            current_failed = total_download - success_count
-            
-            logging.info(
-                f"时间点完成 - 总数: {total_all}\n"
-                f"成功: {success_count} | 跳过: {current_skipped} | 失败: {current_failed}\n"
-                f"新增黑名单: {len(new_black_coords)}"
-            )
-            
-            # 累加卫星级统计
-            sat_total += total_all
-            sat_success += success_count
-            sat_skipped += current_skipped
-            sat_failed += current_failed
-            sat_new_black += len(new_black_coords)
-        
-        # 输出卫星汇总日志
-        logging.info(
-            f"卫星 {satellite} 汇总 - 总处理时间点: {len(timestamps)}\n"
-            f"总计成功: {sat_success} | 总计跳过: {sat_skipped} | 总计失败: {sat_failed}\n"
-            f"总新增黑名单: {sat_new_black}"
-        )
+            # 生成下载任务
+            tasks.extend([(satellite, timestamp, x, y) for x, y in download_coords])
 
+    # 阶段2: 批量并行下载
+    def _download_wrapper(args):
+        satellite, timestamp, x, y = args
+        success, is_black = download_tile(satellite, timestamp, x, y)
+        return (satellite, timestamp, success, is_black, x, y)
+
+    results = []
+    if tasks:
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = [executor.submit(_download_wrapper, task) for task in tasks]
+            for future in as_completed(futures):
+                results.append(future.result())
+    else:
+        logging.info("没有需要下载的任务")
+        return
+
+    # 阶段3: 处理结果并更新黑名单
+    result_stats = defaultdict(lambda: defaultdict(lambda: {
+        'success': 0,
+        'failed': 0,
+        'new_black': 0
+    }))
+    new_black = defaultdict(set)
+
+    for satellite, timestamp, success, is_black, x, y in results:
+        # 统计下载结果
+        key = 'success' if success else 'failed'
+        result_stats[satellite][timestamp][key] += 1
+        
+        # 处理黑名单
+        if is_black:
+            new_black[satellite].add((x, y))
+            result_stats[satellite][timestamp]['new_black'] += 1
+
+    # 更新黑名单文件
+    for sat in new_black:
+        blacklist.setdefault(sat, set()).update(new_black[sat])
+    save_blacklist(blacklist)
+
+    # 阶段4: 生成统计报告
+    for satellite in filtered_times:
+        sat_total = sat_success = sat_skipped = sat_failed = sat_new_black = 0
+        
+        for timestamp in filtered_times[satellite]:
+            # 获取预处理数据
+            pre = pre_stats[satellite][timestamp]
+            # 获取结果数据
+            res = result_stats[satellite][timestamp]
+            
+            # 生成时间点日志
+            time_str = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M")
+            logging.info(f"\n卫星 {satellite} 时间点 {time_str}:")
+            logging.info(f"总区域数: {pre['total']}")
+            logging.info(f"成功: {res.get('success',0)} | 跳过: {pre['skipped']} | 失败: {res.get('failed',0)}")
+            logging.info(f"新增黑名单: {res.get('new_black',0)}")
+            
+            # 累加卫星统计
+            sat_total += pre['total']
+            sat_success += res.get('success',0)
+            sat_skipped += pre['skipped']
+            sat_failed += res.get('failed',0)
+            sat_new_black += res.get('new_black',0)
+
+        # 生成卫星汇总日志
+        logging.info(f"\n卫星 {satellite} 汇总:")
+        logging.info(f"处理时间点: {len(filtered_times[satellite])}")
+        logging.info(f"总处理区域: {sat_total}")
+        logging.info(f"成功率: {sat_success/(sat_total - sat_skipped)*100:.1f}% [成功{sat_success}/尝试{sat_total - sat_skipped}]")
+        logging.info(f"新增黑名单数: {sat_new_black}")

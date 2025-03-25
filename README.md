@@ -44,7 +44,7 @@ zec process-api
 zec process-api -s himawari -h 24
 zec process-concat
 zec process-concat -s himawari -h 24
-zec process-video -i mosaics/himawari
+zec process-video -i mosaics/himawari -d 24
 ```
 ## Running Tests
 
