@@ -143,7 +143,7 @@ def process_concat(
     # 获取当前UTC时间
     now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
     
-    # 遍历目录结构：卫星/日期/时间
+    # 遍历目录结构：卫星/日期/zoom/时间
     for satellite in base_path.iterdir():
         # 过滤非目录和不在列表中的卫星
         if not satellite.is_dir():
@@ -153,49 +153,55 @@ def process_concat(
             continue
 
         # 遍历日期目录
-        for date_dir in satellite.glob("*"):
-            if not date_dir.is_dir():
+        for zoom_dir in satellite.glob("*"):
+            if not zoom_dir.is_dir():
                 continue
 
-            # 遍历时间目录
-            for time_dir in date_dir.glob("*"):
-                if not time_dir.is_dir():
+            # 遍历zoom目录
+            for date_dir in zoom_dir.glob("*"):
+                if not date_dir.is_dir():
                     continue
 
-                # 处理时间范围过滤
-                if hours > 0:
-                    try:
-                        # 解析日期和时间（目录格式为 2025-03-20 和 1130）
-                        dt = datetime.strptime(
-                            f"{date_dir.name}{time_dir.name}", 
-                            "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
-                        )
-                    except ValueError as e:
-                        logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
+                # 遍历时间目录
+                for time_dir in date_dir.glob("*"):
+                    if not time_dir.is_dir():
                         continue
 
-                    # 计算时间差（UTC 时间）
-                    time_diff = now_utc - dt
-                    if time_diff.total_seconds() > hours * 3600:
-                        logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
-                        continue
+                    # 处理时间范围过滤
+                    if hours > 0:
+                        try:
+                            # 解析日期和时间（目录格式为 2025-03-20 和 1130）
+                            dt = datetime.strptime(
+                                f"{date_dir.name}{time_dir.name}", 
+                                "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
+                            )
+                        except ValueError as e:
+                            logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
+                            continue
 
-                # 生成输出路径
-                output_path = (
-                    Path(output_dir) 
-                    / satellite.name 
-                    / date_dir.name 
-                    / f"{time_dir.name}.png"
-                )
-                
-                # 执行拼接
-                concat_tiles(
-                    tile_dir=time_dir,
-                    output_path=output_path,  # type: ignore
-                    tile_size=tile_size,
-                    rotate_deg=rotate,
-                    show_coords=show_coords
-                )
+                        # 计算时间差（UTC 时间）
+                        time_diff = now_utc - dt
+                        if time_diff.total_seconds() > hours * 3600:
+                            logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
+                            continue
+
+                    # 生成输出路径（包含zoom级别）
+                    output_path = (
+                        Path(output_dir) 
+                        / satellite.name 
+                        / zoom_dir.name
+                        / date_dir.name 
+                        / f"{time_dir.name}.png"
+                    )
+                    
+                    # 执行拼接
+                    concat_tiles(
+                        tile_dir=time_dir,
+                        output_path=output_path,  # type: ignore
+                        tile_size=tile_size,
+                        rotate_deg=rotate,
+                        show_coords=show_coords
+                    )
 
     logger.info("所有拼接任务已完成")
 
@@ -218,6 +224,12 @@ def process_from_api(
         "--hours", "-h", 
         min=0,
         help="仅下载最新N小时内的数据（0表示不限制），默认1小时"
+    ),
+    zoom: int = typer.Option(
+        4,
+        "--zoom", "-z",
+        min=4, max=5,
+        help="zoom级别 (4或5)，默认4"
     )
 ):
     """主流程（支持卫星选择和时间过滤）"""
@@ -226,7 +238,8 @@ def process_from_api(
         batch_download(
             concurrency=concurrency,
             satellites=satellites,
-            hours=hours
+            hours=hours,
+            zoom=zoom
         )
         print(Panel("[bold green]所有任务完成![/]", title="完成通知"))
     except Exception as e:

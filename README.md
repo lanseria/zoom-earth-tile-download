@@ -41,13 +41,13 @@ pip install -e ".[test]"
 Add two numbers:
 ```bash
 zec process-api
-zec process-api -s himawari -h 24
-zec process-api -s msg-iodc -h 24
+zec process-api -s himawari -h 24 -z 5
+zec process-api -s msg-iodc -h 24 -z 5
 zec process-concat
 zec process-concat -s himawari -h 24
 zec process-concat -s msg-iodc -h 24
-zec process-video -i mosaics/himawari -d 24
-zec process-video -i mosaics/msg-iodc -d 24
+zec process-video -i mosaics/himawari/5 -d 24
+zec process-video -i mosaics/msg-iodc/5 -d 24
 ```
 ## Running Tests
 

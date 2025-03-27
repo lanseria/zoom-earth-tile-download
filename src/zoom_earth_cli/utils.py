@@ -61,29 +61,54 @@ def draw_tile_info(draw, position, text, tile_size):
         font=font
     )
 
-def load_blacklist() -> Dict[str, Set[Tuple[int, int]]]:
-    """加载黑名单配置"""
+def load_blacklist() -> Dict[str, Dict[int, Set[Tuple[int, int]]]]:
+    """加载黑名单配置，返回格式: {satellite: {zoom: set((x,y))}}"""
     if not os.path.exists(BLACKLIST_PATH):
-        return defaultdict(set)
+        return defaultdict(lambda: defaultdict(set))
     
     try:
         with open(BLACKLIST_PATH, 'r') as f:
             raw = json.load(f)
-        blacklist = defaultdict(set)
-        for sat, coords in raw.items():
-            blacklist[sat] = {tuple(coord) for coord in coords}
+        
+        # 使用双重默认字典结构
+        blacklist = defaultdict(lambda: defaultdict(set))
+        
+        for sat, zoom_data in raw.items():
+            for zoom_str, coords in zoom_data.items():
+                zoom = int(zoom_str)
+                # 将列表转换为元组集合
+                blacklist[sat][zoom] = {tuple(coord) for coord in coords}
+        
         return blacklist
+    
     except Exception as e:
         logging.error(f"加载黑名单失败：{e}")
-        return defaultdict(set)
+        # 保持结构一致性，返回双重默认字典
+        return defaultdict(lambda: defaultdict(set))
 
-def get_tile_path(satellite: str, timestamp: str, x: int, y: int) -> str:
+def save_blacklist(blacklist: Dict[str, Dict[int, Set[Tuple[int, int]]]]):
+    """保存支持zoom层级的黑名单配置"""
+    # 转换为可序列化的字典结构
+    serializable = defaultdict(dict)
+    
+    for sat, zoom_data in blacklist.items():
+        for zoom, coords in zoom_data.items():
+            # 将元组集合转换为列表的列表，zoom转换为字符串作为key
+            serializable[sat][str(zoom)] = [list(c) for c in coords]
+    
+    try:
+        with open(BLACKLIST_PATH, 'w') as f:
+            json.dump(serializable, f, indent=2)
+    except Exception as e:
+        logging.error(f"保存黑名单失败：{e}")
+
+def get_tile_path(satellite: str, timestamp: str, x: int, y: int, zoom: int) -> str:
     """生成图片存储路径（示例）"""
-    return f"tiles/{satellite}/{timestamp}/{x}_{y}.png"
+    return f"tiles/{satellite}/{zoom}/{timestamp}/{x}_{y}.png"
 
-def generate_black_tile(satellite: str, timestamp: str, x: int, y: int):
+def generate_black_tile(satellite: str, timestamp: str, x: int, y: int, zoom: int = 4):
     """生成全黑图片并保存"""
-    path = get_tile_path(satellite, timestamp, x, y)
+    path = get_tile_path(satellite, zoom, timestamp, x, y)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     try:
         img = Image.new('RGB', (256, 256), (0, 0, 0))
@@ -91,18 +116,6 @@ def generate_black_tile(satellite: str, timestamp: str, x: int, y: int):
         logging.debug(f"生成全黑图片：{path}")
     except Exception as e:
         logging.error(f"生成全黑图片失败：{path}, 错误：{e}")
-
-def save_blacklist(blacklist: Dict[str, Set[Tuple[int, int]]]):
-    """保存黑名单配置"""
-    serializable = {
-        sat: [list(coord) for coord in coords]
-        for sat, coords in blacklist.items()
-    }
-    try:
-        with open(BLACKLIST_PATH, 'w') as f:
-            json.dump(serializable, f, indent=2)
-    except Exception as e:
-        logging.error(f"保存黑名单失败：{e}")
 
 def validate_coordinates(filename: str) -> tuple:
     """解析文件名中的坐标"""

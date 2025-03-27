@@ -96,16 +96,24 @@ def get_latest_times(hours: int = 1):
         )
     return {}
 
-def download_tile(satellite: str, timestamp: int, x: int, y: int) -> Tuple[bool, bool]:
-    """下载单个贴图，返回（是否成功，是否黑图）"""
+def download_tile(satellite: str, timestamp: int, x: int, y: int, zoom: int = 4) -> Tuple[bool, bool]:
+    """下载单个贴图，返回（是否成功，是否黑图）
+    
+    Args:
+        satellite: 卫星名称
+        timestamp: 时间戳
+        x: x坐标
+        y: y坐标 
+        zoom: zoom级别，默认为4
+    """
     try:
         dt = datetime.fromtimestamp(timestamp, timezone.utc)
         date_str = dt.strftime("%Y-%m-%d")
         time_str = dt.strftime("%H%M")
         
         # 构建 URL 和文件路径
-        url = f"https://tiles.zoom.earth/geocolor/{satellite}/{date_str}/{time_str}/4/{x}/{y}.jpg"
-        save_dir = os.path.join("downloads", satellite, date_str, time_str)
+        url = f"https://tiles.zoom.earth/geocolor/{satellite}/{date_str}/{time_str}/{zoom}/{x}/{y}.jpg"
+        save_dir = os.path.join("downloads", satellite, f"{zoom}", date_str, time_str)
         os.makedirs(save_dir, exist_ok=True)
         filename = os.path.join(save_dir, f"x{x}_y{y}.jpg")
         
@@ -130,7 +138,7 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int) -> Tuple[bool,
         file_size = os.path.getsize(temp_file)
         if file_size < 0.2 * 1024:  # 0.2KB = 204.8 bytes
             logger.warning(f"检测到黑图: {filename} ({file_size/1024:.1f}KB)")
-            generate_black_tile(filename, timestamp, x, y)  # 生成黑图替换
+            generate_black_tile(filename, timestamp, x, y, zoom)  # 生成黑图替换
             os.remove(temp_file)  # 删除无效文件
             return (True, True)   # 成功生成黑图，需要记录到黑名单
         else:
@@ -149,7 +157,8 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int) -> Tuple[bool,
 def batch_download(
         concurrency: int = 5,
         satellites: Optional[List[str]] = None,
-        hours: int = 1
+        hours: int = 1,
+        zoom: int = 4
     ):
     """批量下载主逻辑（包含黑名单过滤）优化版
     
@@ -157,54 +166,54 @@ def batch_download(
         concurrency: 并发线程数，默认5
         satellites: 要处理的卫星列表，默认全部
         hours: 仅处理最新N小时内的数据，0表示不限制
+        zoom: zoom级别，默认为4
     """
-    # 设置卫星默认值
+    from zoom_earth_cli.const import get_ranges_for_zoom
+
     if satellites is None:
         satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
 
-    # 获取时间数据并过滤卫星
     latest_times = get_latest_times(hours=hours)
     if not latest_times:
         logging.error("获取卫星时间数据失败")
         return
     
     filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
-    blacklist = load_blacklist()
-    x_range = X_RANGE
-    y_range = Y_RANGE
+    blacklist = load_blacklist()  # 现在返回结构: {sat: {zoom: set(coords)}}
+    x_range, y_range = get_ranges_for_zoom(zoom)
 
-    # 阶段1: 预生成所有任务并处理黑瓷砖
+    # 阶段1: 预处理
     tasks = []
-    pre_stats = defaultdict(lambda: defaultdict(dict))  # 记录预处理统计数据
-    
+    pre_stats = defaultdict(lambda: defaultdict(dict))
+
     for satellite in filtered_times:
-        # 初始化卫星统计
         pre_stats[satellite] = {}
         
         for timestamp in filtered_times[satellite]:
-            # 生成所有坐标并过滤黑名单
             all_coords = [(x, y) for x in x_range for y in y_range]
-            skip_coords = {(x, y) for x, y in all_coords if (x, y) in blacklist.get(satellite, set())}
+            # 获取当前卫星当前zoom的黑名单坐标
+            zoom_bl = blacklist.get(satellite, {}).get(zoom, set())
+            skip_coords = {(x, y) for x, y in all_coords if (x, y) in zoom_bl}
             
             # 生成黑瓷砖
             for x, y in skip_coords:
-                generate_black_tile(satellite, timestamp, x, y)
+                generate_black_tile(satellite, timestamp, x, y, zoom)
             
             # 记录预处理数据
-            download_coords = [c for c in all_coords if c not in skip_coords]
             pre_stats[satellite][timestamp] = {
                 'total': len(all_coords),
                 'skipped': len(skip_coords),
-                'downloaded': len(download_coords)
+                'downloadable': len(all_coords) - len(skip_coords)
             }
             
             # 生成下载任务
-            tasks.extend([(satellite, timestamp, x, y) for x, y in download_coords])
+            tasks.extend([(satellite, timestamp, x, y) 
+                        for x, y in all_coords if (x, y) not in skip_coords])
 
     # 阶段2: 批量并行下载
     def _download_wrapper(args):
         satellite, timestamp, x, y = args
-        success, is_black = download_tile(satellite, timestamp, x, y)
+        success, is_black = download_tile(satellite, timestamp, x, y, zoom)
         return (satellite, timestamp, success, is_black, x, y)
 
     results = []
@@ -217,28 +226,24 @@ def batch_download(
         logging.info("没有需要下载的任务")
         return
 
-    # 阶段3: 处理结果并更新黑名单
+    # 阶段3: 处理结果
     result_stats = defaultdict(lambda: defaultdict(lambda: {
-        'success': 0,
-        'failed': 0,
-        'new_black': 0
+        'success': 0, 'failed': 0, 'new_black': 0
     }))
-    new_black = defaultdict(set)
+    new_black = defaultdict(lambda: defaultdict(set))  # 新结构: {sat: {zoom: set}}
 
     for satellite, timestamp, success, is_black, x, y in results:
-        # 统计下载结果
-        key = 'success' if success else 'failed'
-        result_stats[satellite][timestamp][key] += 1
-        
-        # 处理黑名单
+        result_stats[satellite][timestamp]['success' if success else 'failed'] += 1
         if is_black:
-            new_black[satellite].add((x, y))
+            new_black[satellite][zoom].add((x, y))  # 关联当前zoom
             result_stats[satellite][timestamp]['new_black'] += 1
 
-    # 更新黑名单文件
+    # 更新黑名单（支持zoom层级）
     for sat in new_black:
-        blacklist.setdefault(sat, set()).update(new_black[sat])
-    save_blacklist(blacklist)
+        for z in new_black[sat]:
+            # 合并当前zoom的黑名单
+            blacklist.setdefault(sat, {}).setdefault(z, set()).update(new_black[sat][z])
+    save_blacklist(blacklist)  # 使用新的保存方法
 
     # 阶段4: 失败任务重试
     failed_tasks = []
