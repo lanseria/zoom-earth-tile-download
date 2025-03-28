@@ -206,6 +206,99 @@ def process_concat(
     logger.info("所有拼接任务已完成")
 
 
+@app.command(name="process-concat-all")
+def process_concat_all(
+    input_dir: str = typer.Option("downloads", help="由 process-all 下载的原始瓦片目录"),
+    output_dir: str = typer.Option("mosaics_all", help="拼接结果目录"),
+    tile_size: int = typer.Option(256, min=128, max=512, help="瓦片像素尺寸"),
+    rotate: int = typer.Option(0, help="瓦片旋转角度 (0/90/180/270)"),
+    show_coords: bool = typer.Option(False, "--show-coords/--no-coords", help="是否显示瓦片坐标信息"),
+    hours: int = typer.Option(
+        0,
+        "--hours", "-h",
+        min=0,
+        help="仅处理最新N小时内的数据（0表示不限制），默认1小时"
+    ),
+    zoom_level: int = typer.Option(
+        4,
+        "--zoom", "-z",
+        min=4, max=5,
+        help="要处理的 zoom 级别 (4 或 5)，默认 4"
+    )
+):
+    """
+    拼接由 process-all 下载的卫星图片
+    """
+    logger.info(f"启动 'process-all' 图片拼接任务 (Zoom: {zoom_level})...")
+
+    base_path = Path(input_dir)
+    if not base_path.exists():
+        logger.error(f"输入目录不存在: {input_dir}")
+        raise typer.Exit(code=1)
+
+    # 获取当前UTC时间
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+
+    # 遍历目录结构：zoom/日期/时间
+    zoom_path = base_path / str(zoom_level)
+    if not zoom_path.is_dir():
+        logger.warning(f"Zoom 级别目录不存在: {zoom_path}")
+        return # 或者 raise typer.Exit(code=1) 如果需要强制
+
+    # 遍历日期目录
+    for date_dir in zoom_path.glob("*"):
+        if not date_dir.is_dir():
+            continue
+
+        # 遍历时间目录
+        for time_dir in date_dir.glob("*"):
+            if not time_dir.is_dir():
+                continue
+
+            # 处理时间范围过滤
+            if hours > 0:
+                try:
+                    # 解析日期和时间（目录格式为 2025-03-20 和 1130）
+                    dt = datetime.strptime(
+                        f"{date_dir.name}{time_dir.name}",
+                        "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
+                    )
+                except ValueError as e:
+                    logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
+                    continue
+
+                # 计算时间差（UTC 时间）
+                time_diff = now_utc - dt
+                if time_diff.total_seconds() > hours * 3600:
+                    logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
+                    continue
+
+            # 生成输出路径（包含zoom级别）
+            output_path = (
+                Path(output_dir)
+                / str(zoom_level)
+                / date_dir.name
+                / f"{time_dir.name}.png"
+            )
+
+            # 执行拼接
+            try:
+                concat_tiles(
+                    tile_dir=time_dir,
+                    output_path=output_path,
+                    tile_size=tile_size,
+                    rotate_deg=rotate,
+                    reverse_y=False, # 根据实际需要调整
+                    show_coords=show_coords,
+                    swap_xy=True # 根据实际需要调整
+                )
+            except Exception as e:
+                 logger.error(f"拼接失败: {time_dir} -> {output_path} | 错误: {e}", exc_info=True)
+
+
+    logger.info(f"Zoom {zoom_level} 的拼接任务已完成")
+
+
 @app.command(name="process-api")
 def process_from_api(
     concurrency: int = typer.Option(
@@ -256,9 +349,9 @@ def process_all(
         help="并发下载线程数 (1-20)"
     ),
     hours: int = typer.Option(
-        2,
+        1,
         "--hours", "-h", 
-        min=2,
+        min=1,
         help="仅下载最新N小时内的数据（0表示不限制），默认1小时"
     ),
     zoom: int = typer.Option(

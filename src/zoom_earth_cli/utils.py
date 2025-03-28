@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import platform
 from PIL import Image, ImageDraw, ImageFont
-from typing import Dict
+from typing import Dict, List, Optional, Any
 import numpy as np
 from typing import Dict, Set, Tuple
 from collections import defaultdict
@@ -321,147 +321,131 @@ def smart_feather_alpha(img, left_margin, right_margin, feather_width=150, debug
     
     return img_rgba
 
+def filter_timestamps_by_hours(latest_times: Dict[str, List[int]], hours: int) -> Dict[str, List[int]]:
+    """Filters timestamps to keep only those within the last N hours."""
+    if hours <= 0:
+        # Return a copy to avoid modifying the original dict downstream
+        return {sat: list(ts_list) for sat, ts_list in latest_times.items()}
 
-def fetch_latest_times() -> dict:
-    """获取原始卫星时间数据（无过滤）
-    
-    Returns:
-        原始时间戳数据字典 {satellite: [timestamps]}
-    """
-    import requests
-    from datetime import datetime
-    import os
-    import json
-    import logging
-    
-    logger = logging.getLogger(__name__)
-    
-    headers = {
-        'accept': '*/*',
-        'accept-language': 'zh-CN,zh;q=0.9',
-        'cache-control': 'no-cache',
-        'dnt': '1',
-        'origin': 'https://zoom.earth',
-        'pragma': 'no-cache',
-        'priority': 'u=1, i',
-        'referer': 'https://zoom.earth/',
-        'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"macOS"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-site',
-        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
-    }
-    
-    url = "https://tiles.zoom.earth/times/geocolor.json"
+    max_ts = 0
     try:
-        logger.debug(f"开始获取卫星时间数据: {url}")
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        data = response.json()
-        
-        # 生成带时间戳的文件名
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename = f"./debug_output/satellite_times_{timestamp}.json"
-        
-        # 创建目录（如果不存在）
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        
-        # 保存原始数据（不经过滤）
-        try:
-            with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            logger.debug(f"原始时间数据已保存至 {filename}")
-        except IOError as e:
-            logger.error(f"保存时间数据文件失败: {str(e)}", exc_info=True)
-        
-        return data
+        # Find the overall latest timestamp across all non-empty lists
+        all_ts = [ts for ts_list in latest_times.values() for ts in ts_list]
+        if not all_ts:
+             return {sat: [] for sat in latest_times} # No timestamps anywhere
+        max_ts = max(all_ts)
+    except ValueError:
+        # Handle case where latest_times might be empty or contain only empty lists
+         return {sat: [] for sat in latest_times}
 
-    except requests.exceptions.RequestException as e:
-        logger.error(
-            f"获取卫星时间失败 - URL: {url} | 状态码: {getattr(e.response, 'status_code', 'N/A')}",
-            exc_info=True
-        )
-    except Exception as e:
-        logger.error(
-            f"处理卫星时间数据异常: {str(e)}",
-            exc_info=True
-        )
-    return {}
 
-def filter_timestamps_by_hours(data: dict, hours: int) -> dict:
-    """根据小时数过滤时间戳数据
-    
-    Args:
-        data: 原始时间戳数据 {satellite: [timestamps]}
-        hours: 要保留的小时数
-        
-    Returns:
-        过滤后的时间戳数据
+    cutoff_ts = max_ts - hours * 3600  # Calculate cutoff time
+
+    filtered_data = {}
+    for satellite, timestamps in latest_times.items():
+        # Keep timestamps greater than or equal to the cutoff
+        filtered_data[satellite] = sorted([ts for ts in timestamps if ts >= cutoff_ts])
+
+    return filtered_data
+
+
+def process_latest_times(latest_times: Dict[str, List[int]], hours: int = 2) -> List[Dict[str, Any]]:
     """
-    import time
-    import logging
-    
-    current_time = time.time()
-    result = {}
-    
-    for satellite, timestamps in data.items():
-        # 时间范围过滤
-        if hours > 0:
-            valid_times = [ts for ts in timestamps 
-                          if (current_time - ts) <= hours * 3600]
-            if not valid_times:
-                logging.warning(f"卫星 {satellite} 无有效数据（最新数据 {round((current_time - max(timestamps))/3600,1)} 小时前）")
-                continue
-            latest = valid_times
-        else:
-            latest = timestamps
-        
-        result[satellite] = latest
-    
-    return result
+    Processes latest time data, groups by timestamp, and fills in the latest value for each satellite.
 
-def process_latest_times(latest_times: dict, hours: int = 2) -> list:
-    """处理最新时间数据，按时间戳分组并填充各卫星最新值
-    
     Args:
-        latest_times: 各卫星的时间戳字典
-        hours: 仅保留最近N小时内的数据(0表示不限制)，默认2小时
-        
+        latest_times: Dictionary of satellite names to lists of timestamps {satellite: [timestamps]}.
+        hours: Only keep data within the last N hours (0 means no limit). Default is 2.
+
     Returns:
-        按时间戳分组的列表，每个元素包含各卫星在该时间点的最新时间戳
+        A list of dictionaries, sorted by timestamp. Each dictionary contains:
+        {
+            'timestamp': The master timestamp for this entry,
+            'goes-east': Latest timestamp for goes-east <= master timestamp,
+            'goes-west': Latest timestamp for goes-west <= master timestamp,
+            ... (for all satellites)
+        }
+        Only includes master timestamps from the point where *all* satellites have reported at least once.
     """
-    # 先过滤时间戳数据
-    filtered_data = filter_timestamps_by_hours(latest_times, hours)
-    if not filtered_data:
+    if not latest_times:
         return []
-    
-    # 收集所有唯一时间戳并排序
-    all_timestamps = set()
-    for timestamps in filtered_data.values():
-        all_timestamps.update(timestamps)
-    sorted_timestamps = sorted(all_timestamps)
-    
-    # 初始化各卫星的最新时间戳(使用过滤后的数据中最旧的时间戳)
-    satellite_last = {}
-    for sat, timestamps in filtered_data.items():
-        if timestamps:
-            satellite_last[sat] = min(timestamps)
-    
-    result = []
-    for ts in sorted_timestamps:
-        entry = {'timestamp': ts}
-        
-        # 更新各卫星的最新时间戳
-        for sat, timestamps in filtered_data.items():
-            # 查找该卫星小于等于当前时间戳的最新时间
-            valid_times = [t for t in timestamps if t <= ts]
-            if valid_times:
-                satellite_last[sat] = max(valid_times)
-            entry[sat] = satellite_last[sat]
-        
+
+    # 1. Filter timestamps by the specified hour window
+    filtered_data = filter_timestamps_by_hours(latest_times, hours)
+
+    # If filtering removed all data points across all satellites, return empty
+    if not any(filtered_data.values()):
+        print("Warning: Filtering removed all timestamps.")
+        return []
+
+    # 2. Get the list of all satellites we need to track (from the original input keys)
+    satellites = list(latest_times.keys())
+    if not satellites:
+        return [] # No satellites specified
+
+    # 3. Collect all unique timestamps from the *filtered* data and sort them
+    all_timestamps_set: Set[int] = set()
+    for sat in satellites:
+        # Use .get to handle cases where a satellite might have no data after filtering
+        all_timestamps_set.update(filtered_data.get(sat, []))
+
+    if not all_timestamps_set:
+        # If, after filtering, there are no timestamps left at all
+        print("Warning: No timestamps remain after filtering.")
+        return []
+
+    sorted_timestamps = sorted(list(all_timestamps_set))
+
+    # 4. Find the first "master" timestamp where *all* satellites have at least one data point <= that timestamp
+    start_ts: Optional[int] = None
+    start_index: int = -1
+    for i, ts in enumerate(sorted_timestamps):
+        all_sats_have_data = True
+        for sat in satellites:
+            # Check if there exists any timestamp for this satellite <= current ts
+            has_data_at_or_before_ts = any(t <= ts for t in filtered_data.get(sat, []))
+            if not has_data_at_or_before_ts:
+                all_sats_have_data = False
+                break  # No need to check other satellites for this ts
+
+        if all_sats_have_data:
+            start_ts = ts
+            start_index = i
+            break # Found the first valid starting timestamp
+
+    # If no timestamp exists where all satellites have data (e.g., one satellite never reported)
+    if start_ts is None:
+        print(f"Warning: Could not find a timestamp where all satellites ({', '.join(satellites)}) have data.")
+        return []
+
+    # 5. Initialize the 'last known timestamp' for each satellite based on the found start_ts
+    current_latest_ts: Dict[str, int] = {}
+    for sat in satellites:
+        # Find the maximum timestamp for this satellite that is <= start_ts
+        # We know at least one exists because of the check in step 4
+        relevant_times = [t for t in filtered_data.get(sat, []) if t <= start_ts]
+        # This list is guaranteed non-empty by the logic in step 4
+        current_latest_ts[sat] = max(relevant_times)
+
+
+    # 6. Iterate through sorted timestamps *starting from the valid start index*
+    result: List[Dict[str, Any]] = []
+    for i in range(start_index, len(sorted_timestamps)):
+        master_ts = sorted_timestamps[i]
+        entry: Dict[str, Any] = {'timestamp': master_ts}
+
+        # Update the 'last known timestamp' for any satellite that has a new data point *at* master_ts
+        for sat in satellites:
+             # Check if this satellite specifically reported at master_ts
+             # Using a set could be faster for large lists, but requires pre-conversion
+             if master_ts in filtered_data.get(sat, []):
+                 current_latest_ts[sat] = master_ts
+             # Otherwise, current_latest_ts[sat] remains unchanged (carry-forward)
+
+        # Populate the result entry with the current latest timestamp for each satellite
+        for sat in satellites:
+            entry[sat] = current_latest_ts[sat]
+
         result.append(entry)
-    
+
     return result

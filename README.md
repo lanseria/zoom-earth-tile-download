@@ -50,9 +50,14 @@ zec process-api -s mtg-zero -h 1 -z 4
 zec process-api -s goes-east -h 1 -z 4
 zec process-api -s goes-west -h 1 -z 4
 #
+zec process-all -h 2
+#
 zec process-concat
 zec process-concat -s himawari -h 24
 zec process-concat -s msg-iodc -h 24
+#
+zec process-concat-all
+#
 zec process-video -i mosaics/himawari/5 -d 24
 zec process-video -i mosaics/msg-iodc/5 -d 24
 ```

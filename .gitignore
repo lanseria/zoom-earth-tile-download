@@ -33,6 +33,7 @@ wheels/
 input/
 output/
 mosaics/
+mosaics_all/
 debug_output/
 tiles/
 output_videos/

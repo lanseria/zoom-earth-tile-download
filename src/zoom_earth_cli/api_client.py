@@ -9,7 +9,8 @@ from typing import Tuple, Optional, List
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist, process_latest_times, filter_timestamps_by_hours, fetch_latest_times
+from zoom_earth_cli.const import get_ranges_for_zoom
+from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist, process_latest_times, filter_timestamps_by_hours
 
 
 # 初始化模块级 logger
@@ -32,6 +33,23 @@ headers = {
     'sec-fetch-site': 'same-site',
     'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
 }
+
+
+# --- Satellite Mapping (Optional Improvement) ---
+SATELLITE_Y_RANGES = {
+    "goes-east": range(0, 3),   # Includes 0, 1, 2
+    "goes-west": range(3, 7),   # Includes 3, 4, 5, 6
+    "mtg-zero":  range(7, 10),  # Includes 7, 8, 9
+    "msg-iodc":  range(10, 12), # Includes 10, 11
+    "himawari":  range(12, 16), # Includes 12, 13, 14, 15
+}
+
+def get_satellite_for_y(y: int) -> str | None:
+    """Determines satellite based on Y coordinate using the mapping."""
+    for sat, y_range in SATELLITE_Y_RANGES.items():
+        if y in y_range:
+            return sat
+    return None
 
 def fetch_latest_times():
     """获取各卫星最新时间戳
@@ -171,7 +189,6 @@ def batch_download(
         hours: 仅处理最新N小时内的数据，0表示不限制
         zoom: zoom级别，默认为4
     """
-    from zoom_earth_cli.const import get_ranges_for_zoom
 
     if satellites is None:
         satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
@@ -303,6 +320,160 @@ def all_download(
     hours: int = 2,
     zoom: int = 4
 ):
-    latest_times = fetch_latest_times()
-    processed = process_latest_times(latest_times)
-    pprint(processed)
+    """根据规则批量下载卫星图片"""
+    logger.info(f"Starting download process: concurrency={concurrency}, hours={hours}, zoom={zoom}")
+
+    # 获取时间数据
+    try:
+        latest_times = get_latest_times(hours=hours)
+        if not latest_times:
+            logger.error("获取卫星时间数据失败 (get_latest_times returned empty)")
+            return
+    except Exception as e:
+        logger.error(f"获取卫星时间数据时出错: {e}", exc_info=True)
+        return
+
+    processed = process_latest_times(latest_times, hours)
+    if not processed:
+        logger.warning("处理后的时间数据为空，没有时间点可供下载。")
+        return
+
+    logger.info(f"处理了 {len(processed)} 个时间点的数据。")
+    # pprint(processed) # Keep if needed for debugging
+
+    # 获取坐标范围
+    try:
+        x_range, y_range = get_ranges_for_zoom(zoom)
+    except Exception as e:
+        logger.error(f"获取坐标范围时出错: {e}", exc_info=True)
+        return
+
+    # 生成下载任务
+    tasks = []
+    for time_entry in processed:  # 处理所有时间点
+        master_timestamp = time_entry['timestamp'] # Keep for potential logging/grouping if needed
+        for x in x_range:
+            for y in y_range:
+                # 根据y坐标确定卫星 (using helper function)
+                sat = get_satellite_for_y(y)
+                if not sat:
+                    # logger.debug(f"Y coordinate {y} does not map to a known satellite range. Skipping.")
+                    continue
+
+                # 使用该卫星在此时刻的时间戳
+                sat_timestamp = time_entry.get(sat)
+                if sat_timestamp:
+                    # Pass satellite name along with other details
+                    tasks.append((sat, sat_timestamp, x, y, zoom))
+                # else:
+                    # This case should ideally not happen for entries in 'processed'
+                    # logger.warning(f"Timestamp missing for satellite '{sat}' at master time {master_timestamp}. Skipping tile ({x},{y}).")
+
+
+    logger.info(f"生成了 {len(tasks)} 个下载任务。")
+
+    # 并行下载
+    results = []
+    if tasks:
+        with ThreadPoolExecutor(max_workers=concurrency) as executor:
+            # Submit tasks with the new signature
+            futures = [executor.submit(_download_wrapper_by_rule, task) for task in tasks]
+            # Use tqdm here for progress bar if desired
+            # from tqdm import tqdm
+            # for future in tqdm(as_completed(futures), total=len(tasks), desc="Downloading Tiles"):
+            for i, future in enumerate(as_completed(futures)):
+                results.append(future.result())
+                if (i + 1) % 100 == 0: # Log progress periodically
+                     logger.info(f"下载进度: {i+1}/{len(tasks)}")
+
+    else:
+        logger.info("没有需要下载的任务。")
+        return
+
+    # 统计结果
+    if not results:
+        logger.info("下载完成，但没有结果可统计。")
+        return
+
+    success_count = sum(1 for r in results if r[2]) # Index 2 is success flag now
+    total = len(results)
+    # Avoid division by zero
+    success_rate = (success_count / total) * 100 if total > 0 else 0
+    logger.info(f"\n下载完成: 成功 {success_count}/{total} ({success_rate:.1f}%)")
+
+
+def download_tile_by_rule(satellite: str, timestamp: int, x: int, y: int, zoom: int) -> bool:
+    """根据规则下载单个贴图，返回是否成功
+    
+    Args:
+        satellite: 卫星名称 (e.g., 'goes-east')
+        timestamp: 该卫星的时间戳
+        x: x坐标
+        y: y坐标
+        zoom: zoom级别
+
+    Returns:
+        是否成功下载
+    """
+    try:
+        dt = datetime.fromtimestamp(timestamp, timezone.utc)
+        date_str = dt.strftime("%Y-%m-%d")
+        time_str = dt.strftime("%H%M")
+
+        # 构建URL和文件路径
+        url = f"https://tiles.zoom.earth/geocolor/{satellite}/{date_str}/{time_str}/{zoom}/{x}/{y}.jpg"
+        save_dir = os.path.join("downloads", f"{zoom}", date_str, time_str)
+        os.makedirs(save_dir, exist_ok=True)
+        filename = os.path.join(save_dir, f"x{x}_y{y}.jpg") # Simplified filename
+
+        # 检查文件是否已存在
+        if os.path.exists(filename):
+            # logger.debug(f"文件已存在，跳过下载: {filename}")
+            return True
+
+        logger.debug(f"开始下载贴图: {url}")
+
+        # 下载到临时文件
+        temp_file = filename + ".tmp"
+        response = requests.get(url, headers=headers, stream=True, timeout=15) # Increased timeout slightly
+        response.raise_for_status() # Check for 4xx/5xx errors
+
+        # 写入临时文件
+        with open(temp_file, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+
+        # TODO (Optional): Add check for blank/black image here if needed
+        # e.g., check file size: if os.path.getsize(temp_file) < MIN_EXPECTED_SIZE: raise ValueError("Downloaded file too small")
+        # or use Pillow: from PIL import Image; img = Image.open(temp_file); ... check properties ...
+
+        # 重命名为正式文件
+        os.rename(temp_file, filename)
+        logger.debug(f"下载成功: {filename}") # Changed to debug for less verbose success logs
+        return True
+
+    except requests.exceptions.HTTPError as e:
+        # Specifically log HTTP errors (404 Not Found is common)
+        logger.warning(f"下载失败 (HTTP {e.response.status_code}) - URL: {url}")
+        # Clean up temp file if it exists
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
+        return False
+    except requests.exceptions.RequestException as e:
+        # Other network errors (timeout, connection error)
+        logger.warning(f"下载失败 (Network Error) - URL: {url} | Error: {e}")
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
+        return False
+    except Exception as e:
+        logger.error(f"下载贴图时发生未知错误 ({satellite}, {timestamp}, {x}, {y}, {zoom}): {e}", exc_info=True)
+        if 'temp_file' in locals() and os.path.exists(temp_file):
+            os.remove(temp_file)
+        return False
+
+def _download_wrapper_by_rule(args):
+    """包装下载任务（用于线程池）"""
+    satellite, timestamp, x, y, zoom = args
+    success = download_tile_by_rule(satellite, timestamp, x, y, zoom)
+    # Return satellite and timestamp too for potential analysis
+    return (satellite, timestamp, success, x, y)
