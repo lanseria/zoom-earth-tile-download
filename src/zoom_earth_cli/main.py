@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from PIL import Image, ImageChops
 
 from zoom_earth_cli.ffmpeg import generate_timelapse
-from zoom_earth_cli.api_client import batch_download
+from zoom_earth_cli.api_client import batch_download, all_download
 from zoom_earth_cli.utils import concat_tiles, smart_feather_alpha
 
 
@@ -247,6 +247,42 @@ def process_from_api(
         logger.debug(traceback.format_exc())
         print(Panel(f"[bold red]API 处理错误: {str(e)}[/]", title="严重错误"))
 
+@app.command(name="process-all")
+def process_all(
+    concurrency: int = typer.Option(
+        20, 
+        "--concurrency", "-c",
+        min=1, max=40,
+        help="并发下载线程数 (1-20)"
+    ),
+    hours: int = typer.Option(
+        2,
+        "--hours", "-h", 
+        min=2,
+        help="仅下载最新N小时内的数据（0表示不限制），默认1小时"
+    ),
+    zoom: int = typer.Option(
+        4,
+        "--zoom", "-z",
+        min=4, max=5,
+        help="zoom级别 (4或5)，默认4"
+    )
+):
+    """
+    下载所有卫星数据
+    """
+    try:
+        logger.info(f"启动下载任务 | 并发数: {concurrency} | 时间范围: {hours}小时")
+        all_download(
+            concurrency=concurrency,
+            hours=hours,
+            zoom=zoom
+        )
+        print(Panel("[bold green]所有任务完成![/]", title="完成通知"))
+    except Exception as e:
+        logger.error(f"严重错误: {str(e)}")
+        logger.debug(traceback.format_exc())
+        print(Panel(f"[bold red]API 处理错误: {str(e)}[/]", title="严重错误"))
 
 @app.command(name="legacy-process-api")
 def legacy_process_from_api():

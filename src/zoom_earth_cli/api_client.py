@@ -6,12 +6,11 @@ import time
 from pprint import pprint
 from datetime import datetime, timezone
 from typing import Tuple, Optional, List
-from functools import partial
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist
-from zoom_earth_cli.const import X_RANGE, Y_RANGE
+from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist, process_latest_times, filter_timestamps_by_hours, fetch_latest_times
+
 
 # 初始化模块级 logger
 logger = logging.getLogger(__name__)
@@ -34,11 +33,8 @@ headers = {
     'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
 }
 
-def get_latest_times(hours: int = 1):
-    """获取各卫星最新时间戳（支持时间范围过滤）
-    
-    Args:
-        hours: 仅保留最近N小时内的数据（0表示不限制），默认1小时
+def fetch_latest_times():
+    """获取各卫星最新时间戳
     """
     url = "https://tiles.zoom.earth/times/geocolor.json"
     try:
@@ -63,26 +59,33 @@ def get_latest_times(hours: int = 1):
         except IOError as e:
             logger.error(f"保存时间数据文件失败: {str(e)}", exc_info=True)
         
-        # 处理时间数据
-        current_time = time.time()
-        result = {}
+        return data
+
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"获取卫星时间失败 - URL: {url} | 状态码: {getattr(e.response, 'status_code', 'N/A')}",
+            exc_info=True
+        )
+    except Exception as e:
+        logger.error(
+            f"处理卫星时间数据异常: {str(e)}",
+            exc_info=True
+        )
+    return {}
+
+def get_latest_times(hours: int = 1):
+    """获取各卫星最新时间戳
+    Args:
+        hours: 仅保留最近N小时内的数据默认2小时
+    """
+    url = "https://tiles.zoom.earth/times/geocolor.json"
+    try:
+        data = fetch_latest_times()
+        # 调用utils中的时间过滤函数
+        filtered_data = filter_timestamps_by_hours(data, hours)
         
-        for satellite, timestamps in data.items():
-            # 时间范围过滤
-            if hours > 0:
-                valid_times = [ts for ts in timestamps 
-                              if (current_time - ts) <= hours * 3600]
-                if not valid_times:
-                    logger.warning(f"卫星 {satellite} 无有效数据（最新数据 {round((current_time - max(timestamps))/3600,1)} 小时前）")
-                    continue
-                latest = valid_times
-            else:
-                latest = timestamps
-            
-            result[satellite] = latest
-        
-        logger.info(f"成功处理 {len(result)}/{len(data)} 个卫星（{hours}小时过滤）")
-        return result
+        logger.info(f"成功处理 {len(filtered_data)}/{len(data)} 个卫星（{hours}小时过滤）")
+        return filtered_data
 
     except requests.exceptions.RequestException as e:
         logger.error(
@@ -294,3 +297,12 @@ def batch_download(
         logging.info(f"新增黑名单数: {sat_new_black}")
         if sat_failed > 0:
             logging.info(f"失败任务数: {sat_failed} (已重试)")
+
+def all_download(
+    concurrency: int = 20,
+    hours: int = 2,
+    zoom: int = 4
+):
+    latest_times = fetch_latest_times()
+    processed = process_latest_times(latest_times)
+    pprint(processed)

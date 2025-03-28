@@ -43,6 +43,13 @@ Add two numbers:
 zec process-api
 zec process-api -s himawari -h 24 -z 5
 zec process-api -s msg-iodc -h 24 -z 5
+#
+zec process-api -s himawari -h 1 -z 4
+zec process-api -s msg-iodc -h 1 -z 4
+zec process-api -s mtg-zero -h 1 -z 4
+zec process-api -s goes-east -h 1 -z 4
+zec process-api -s goes-west -h 1 -z 4
+#
 zec process-concat
 zec process-concat -s himawari -h 24
 zec process-concat -s msg-iodc -h 24
@@ -94,3 +101,61 @@ sudo apt-get install binutils
 
 - 选择哪个卫星，默认全部 有 goes-east, goes-west, himawari, msg-iodc, msg-zero, mtg-zero
 - 选择哪个最新几小时内，默认最新的 1 小时,
+
+### 4
+
+处理这个数据 latest_times
+数据结构是这样的
+{'goes-east': [1743139200,
+               1743139800,
+               1743140400,
+               1743141000,
+               1743141600,
+               1743142200],
+ 'goes-west': [1743139200,
+               1743139800,
+               1743140400,
+               1743141000,
+               1743141600,
+               1743142200,
+               1743142800],
+ 'himawari': [1743139200,
+              1743139800,
+              1743140400,
+              1743141000,
+              1743141600,
+              1743142200,
+              1743142800],
+ 'msg-iodc': [1743139800, 1743140700, 1743141600, 1743142500, 1743143400],
+ 'msg-zero': [1743139800,
+              1743140700,
+              1743141600,
+              1743142500,
+              1743143400,
+              1743144300],
+ 'mtg-zero': [1743139200,
+              1743139800,
+              1743140400,
+              1743141000,
+              1743141600,
+              1743142200,
+              1743142800,
+              1743143400,
+              1743144000,
+              1743144600]}
+
+根据这个时间戳来分
+比如 1743139200 这个时间戳，有 goes-west, goes-east, mtg-zero, msg-iodc, himawari,
+需要考虑全部可能的时间戳
+最后给我
+[
+  {
+    timestamp: 1743139200,
+    goes-west: 1743139200,
+    goes-east: 1743139200,
+    mtg-zero: 1743139200,
+    msg-iodc: 1743139200,
+    himawari: 1743139200,
+  }
+]
+可能有的时间戳没有卫星是没有的，那就用它上一个可用的时间戳的时间点

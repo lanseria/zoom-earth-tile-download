@@ -320,3 +320,148 @@ def smart_feather_alpha(img, left_margin, right_margin, feather_width=150, debug
         print(f"Debug image saved to: {debug_path}")
     
     return img_rgba
+
+
+def fetch_latest_times() -> dict:
+    """获取原始卫星时间数据（无过滤）
+    
+    Returns:
+        原始时间戳数据字典 {satellite: [timestamps]}
+    """
+    import requests
+    from datetime import datetime
+    import os
+    import json
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    
+    headers = {
+        'accept': '*/*',
+        'accept-language': 'zh-CN,zh;q=0.9',
+        'cache-control': 'no-cache',
+        'dnt': '1',
+        'origin': 'https://zoom.earth',
+        'pragma': 'no-cache',
+        'priority': 'u=1, i',
+        'referer': 'https://zoom.earth/',
+        'sec-ch-ua': '"Chromium";v="134", "Not:A-Brand";v="24", "Google Chrome";v="134"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+        'sec-fetch-dest': 'empty',
+        'sec-fetch-mode': 'cors',
+        'sec-fetch-site': 'same-site',
+        'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36'
+    }
+    
+    url = "https://tiles.zoom.earth/times/geocolor.json"
+    try:
+        logger.debug(f"开始获取卫星时间数据: {url}")
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        data = response.json()
+        
+        # 生成带时间戳的文件名
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"./debug_output/satellite_times_{timestamp}.json"
+        
+        # 创建目录（如果不存在）
+        os.makedirs(os.path.dirname(filename), exist_ok=True)
+        
+        # 保存原始数据（不经过滤）
+        try:
+            with open(filename, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            logger.debug(f"原始时间数据已保存至 {filename}")
+        except IOError as e:
+            logger.error(f"保存时间数据文件失败: {str(e)}", exc_info=True)
+        
+        return data
+
+    except requests.exceptions.RequestException as e:
+        logger.error(
+            f"获取卫星时间失败 - URL: {url} | 状态码: {getattr(e.response, 'status_code', 'N/A')}",
+            exc_info=True
+        )
+    except Exception as e:
+        logger.error(
+            f"处理卫星时间数据异常: {str(e)}",
+            exc_info=True
+        )
+    return {}
+
+def filter_timestamps_by_hours(data: dict, hours: int) -> dict:
+    """根据小时数过滤时间戳数据
+    
+    Args:
+        data: 原始时间戳数据 {satellite: [timestamps]}
+        hours: 要保留的小时数
+        
+    Returns:
+        过滤后的时间戳数据
+    """
+    import time
+    import logging
+    
+    current_time = time.time()
+    result = {}
+    
+    for satellite, timestamps in data.items():
+        # 时间范围过滤
+        if hours > 0:
+            valid_times = [ts for ts in timestamps 
+                          if (current_time - ts) <= hours * 3600]
+            if not valid_times:
+                logging.warning(f"卫星 {satellite} 无有效数据（最新数据 {round((current_time - max(timestamps))/3600,1)} 小时前）")
+                continue
+            latest = valid_times
+        else:
+            latest = timestamps
+        
+        result[satellite] = latest
+    
+    return result
+
+def process_latest_times(latest_times: dict, hours: int = 2) -> list:
+    """处理最新时间数据，按时间戳分组并填充各卫星最新值
+    
+    Args:
+        latest_times: 各卫星的时间戳字典
+        hours: 仅保留最近N小时内的数据(0表示不限制)，默认2小时
+        
+    Returns:
+        按时间戳分组的列表，每个元素包含各卫星在该时间点的最新时间戳
+    """
+    # 先过滤时间戳数据
+    filtered_data = filter_timestamps_by_hours(latest_times, hours)
+    if not filtered_data:
+        return []
+    
+    # 收集所有唯一时间戳并排序
+    all_timestamps = set()
+    for timestamps in filtered_data.values():
+        all_timestamps.update(timestamps)
+    sorted_timestamps = sorted(all_timestamps)
+    
+    # 初始化各卫星的最新时间戳(使用过滤后的数据中最旧的时间戳)
+    satellite_last = {}
+    for sat, timestamps in filtered_data.items():
+        if timestamps:
+            satellite_last[sat] = min(timestamps)
+    
+    result = []
+    for ts in sorted_timestamps:
+        entry = {'timestamp': ts}
+        
+        # 更新各卫星的最新时间戳
+        for sat, timestamps in filtered_data.items():
+            # 查找该卫星小于等于当前时间戳的最新时间
+            valid_times = [t for t in timestamps if t <= ts]
+            if valid_times:
+                satellite_last[sat] = max(valid_times)
+            entry[sat] = satellite_last[sat]
+        
+        result.append(entry)
+    
+    return result
