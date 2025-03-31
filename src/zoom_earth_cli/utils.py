@@ -10,7 +10,7 @@ import numpy as np
 from typing import Dict, Set, Tuple
 from collections import defaultdict
 
-from zoom_earth_cli.const import X_RANGE, Y_RANGE, BLACKLIST_PATH
+from zoom_earth_cli.const import BLACKLIST_PATH
 
 def get_system_font():
     """获取系统默认字体"""

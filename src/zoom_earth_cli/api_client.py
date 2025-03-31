@@ -91,7 +91,7 @@ def fetch_latest_times():
         )
     return {}
 
-def get_latest_times(hours: int = 1):
+def get_latest_times(hours: int = 2):
     """获取各卫星最新时间戳
     Args:
         hours: 仅保留最近N小时内的数据默认2小时
@@ -157,15 +157,15 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int, zoom: int = 4)
 
         # 检查文件大小是否过小（<0.2KB）
         file_size = os.path.getsize(temp_file)
-        if file_size < 0.2 * 1024:  # 0.2KB = 204.8 bytes
-            logger.warning(f"检测到黑图: {filename} ({file_size/1024:.1f}KB)")
-            generate_black_tile(filename, timestamp, x, y, zoom)  # 生成黑图替换
-            os.remove(temp_file)  # 删除无效文件
-            return (True, True)   # 成功生成黑图，需要记录到黑名单
-        else:
-            os.rename(temp_file, filename)  # 重命名为正式文件
-            logger.info(f"下载成功: {filename} ({file_size/1024:.1f}KB)")
-            return (True, False)  # 成功且无需记录
+        # if file_size < 0.2 * 1024:  # 0.2KB = 204.8 bytes
+        #     logger.warning(f"检测到黑图: {filename} ({file_size/1024:.1f}KB)")
+        #     generate_black_tile(filename, timestamp, x, y, zoom)  # 生成黑图替换
+        #     os.remove(temp_file)  # 删除无效文件
+        #     return (True, True)   # 成功生成黑图，需要记录到黑名单
+        # else:
+        os.rename(temp_file, filename)  # 重命名为正式文件
+        logger.info(f"下载成功: {filename} ({file_size/1024:.1f}KB)")
+        return (True, False)  # 成功且无需记录
 
     except requests.exceptions.RequestException as e:
         status_code = getattr(e.response, "status_code", "N/A")
@@ -178,7 +178,7 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int, zoom: int = 4)
 def batch_download(
         concurrency: int = 5,
         satellites: Optional[List[str]] = None,
-        hours: int = 1,
+        hours: int = 2,
         zoom: int = 4
     ):
     """批量下载主逻辑（包含黑名单过滤）优化版
@@ -199,8 +199,7 @@ def batch_download(
         return
     
     filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
-    blacklist = load_blacklist()  # 现在返回结构: {sat: {zoom: set(coords)}}
-    x_range, y_range = get_ranges_for_zoom(zoom)
+    blacklist = load_blacklist() 
 
     # 阶段1: 预处理
     tasks = []
@@ -208,7 +207,7 @@ def batch_download(
 
     for satellite in filtered_times:
         pre_stats[satellite] = {}
-        
+        x_range, y_range = get_ranges_for_zoom(zoom, satellite)
         for timestamp in filtered_times[satellite]:
             all_coords = [(x, y) for x in x_range for y in y_range]
             # 获取当前卫星当前zoom的黑名单坐标
@@ -332,75 +331,7 @@ def all_download(
     except Exception as e:
         logger.error(f"获取卫星时间数据时出错: {e}", exc_info=True)
         return
-
-    processed = process_latest_times(latest_times, hours)
-    if not processed:
-        logger.warning("处理后的时间数据为空，没有时间点可供下载。")
-        return
-
-    logger.info(f"处理了 {len(processed)} 个时间点的数据。")
-    # pprint(processed) # Keep if needed for debugging
-
-    # 获取坐标范围
-    try:
-        x_range, y_range = get_ranges_for_zoom(zoom)
-    except Exception as e:
-        logger.error(f"获取坐标范围时出错: {e}", exc_info=True)
-        return
-
-    # 生成下载任务
-    tasks = []
-    for time_entry in processed:  # 处理所有时间点
-        master_timestamp = time_entry['timestamp'] # Keep for potential logging/grouping if needed
-        for x in x_range:
-            for y in y_range:
-                # 根据y坐标确定卫星 (using helper function)
-                sat = get_satellite_for_y(y)
-                if not sat:
-                    # logger.debug(f"Y coordinate {y} does not map to a known satellite range. Skipping.")
-                    continue
-
-                # 使用该卫星在此时刻的时间戳
-                sat_timestamp = time_entry.get(sat)
-                if sat_timestamp:
-                    # Pass satellite name along with other details
-                    tasks.append((sat, sat_timestamp, x, y, zoom))
-                # else:
-                    # This case should ideally not happen for entries in 'processed'
-                    # logger.warning(f"Timestamp missing for satellite '{sat}' at master time {master_timestamp}. Skipping tile ({x},{y}).")
-
-
-    logger.info(f"生成了 {len(tasks)} 个下载任务。")
-
-    # 并行下载
-    results = []
-    if tasks:
-        with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            # Submit tasks with the new signature
-            futures = [executor.submit(_download_wrapper_by_rule, task) for task in tasks]
-            # Use tqdm here for progress bar if desired
-            # from tqdm import tqdm
-            # for future in tqdm(as_completed(futures), total=len(tasks), desc="Downloading Tiles"):
-            for i, future in enumerate(as_completed(futures)):
-                results.append(future.result())
-                if (i + 1) % 100 == 0: # Log progress periodically
-                     logger.info(f"下载进度: {i+1}/{len(tasks)}")
-
-    else:
-        logger.info("没有需要下载的任务。")
-        return
-
-    # 统计结果
-    if not results:
-        logger.info("下载完成，但没有结果可统计。")
-        return
-
-    success_count = sum(1 for r in results if r[2]) # Index 2 is success flag now
-    total = len(results)
-    # Avoid division by zero
-    success_rate = (success_count / total) * 100 if total > 0 else 0
-    logger.info(f"\n下载完成: 成功 {success_count}/{total} ({success_rate:.1f}%)")
-
+    pprint(latest_times)
 
 def download_tile_by_rule(satellite: str, timestamp: int, x: int, y: int, zoom: int) -> bool:
     """根据规则下载单个贴图，返回是否成功
