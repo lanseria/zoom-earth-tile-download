@@ -325,59 +325,66 @@ def process_concat(
             logger.debug(f"跳过非指定卫星: {satellite.name}")
             continue
 
-        # 遍历日期目录 (这里应该是 zoom 目录)
-        for zoom_dir in satellite.glob("*"):
-            if not zoom_dir.is_dir(): # 确保是目录
-                 # 检查是否是数字命名的目录 (zoom level)
-                if not zoom_dir.name.isdigit():
-                    logger.debug(f"跳过非 zoom 级别目录: {zoom_dir}")
+        # 遍历 satellite 目录下的 zoom 级别目录
+        for zoom_dir in satellite.iterdir(): # 使用 iterdir 获取直接子项
+            if not zoom_dir.is_dir():
+                logger.debug(f"跳过非目录项: {zoom_dir}")
+                continue # 跳过文件或其他非目录项
+
+            if not zoom_dir.name.isdigit():
+                logger.debug(f"跳过非数字命名的 zoom 目录: {zoom_dir.name}")
+                continue # 跳过名称不是数字的目录
+
+            # 确认 zoom_dir 是一个有效的 zoom 级别目录
+            logger.info(f"处理 zoom 目录: {zoom_dir.name}") # 移动日志记录
+
+            # 遍历 zoom 目录下的日期目录
+            for date_dir in zoom_dir.iterdir():
+                if not date_dir.is_dir():
+                    logger.debug(f"跳过 {zoom_dir.name} 下的非日期目录项: {date_dir}")
                     continue
 
-                # 遍历 zoom 目录下的日期目录
-                for date_dir in zoom_dir.glob("*"):
-                    if not date_dir.is_dir():
+                # 遍历日期目录下的时间目录
+                for time_dir in date_dir.iterdir():
+                    if not time_dir.is_dir():
+                        logger.debug(f"跳过 {date_dir.name} 下的非时间目录项: {time_dir}")
                         continue
 
-                    # 遍历时间目录
-                    for time_dir in date_dir.glob("*"):
-                        if not time_dir.is_dir():
+                    # 处理时间范围过滤
+                    if hours > 0:
+                        try:
+                            # 解析日期和时间（目录格式为 2025-03-20 和 1130）
+                            dt = datetime.strptime(
+                                f"{date_dir.name}{time_dir.name}",
+                                "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
+                            )
+                        except ValueError as e:
+                            logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
                             continue
 
-                        # 处理时间范围过滤
-                        if hours > 0:
-                            try:
-                                # 解析日期和时间（目录格式为 2025-03-20 和 1130）
-                                dt = datetime.strptime(
-                                    f"{date_dir.name}{time_dir.name}",
-                                    "%Y-%m-%d%H%M"  # 匹配 2025-03-201130 格式
-                                )
-                            except ValueError as e:
-                                logger.warning(f"时间格式错误: {date_dir.name}/{time_dir.name} ({e})")
-                                continue
+                        # 计算时间差（UTC 时间）
+                        time_diff = now_utc - dt
+                        if time_diff.total_seconds() > hours * 3600:
+                            logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
+                            continue
 
-                            # 计算时间差（UTC 时间）
-                            time_diff = now_utc - dt
-                            if time_diff.total_seconds() > hours * 3600:
-                                logger.debug(f"跳过过期数据 [{dt}] 距今 {time_diff}")
-                                continue
+                    # 生成输出路径（包含zoom级别）
+                    output_path = (
+                        Path(output_dir)
+                        / satellite.name
+                        / zoom_dir.name # 添加 zoom 级别
+                        / date_dir.name
+                        / f"{time_dir.name}.png"
+                    )
 
-                        # 生成输出路径（包含zoom级别）
-                        output_path = (
-                            Path(output_dir)
-                            / satellite.name
-                            / zoom_dir.name # 添加 zoom 级别
-                            / date_dir.name
-                            / f"{time_dir.name}.png"
-                        )
-
-                        # 执行拼接
-                        concat_tiles(
-                            tile_dir=time_dir,
-                            output_path=output_path,  # type: ignore
-                            tile_size=tile_size,
-                            rotate_deg=rotate,
-                            show_coords=show_coords
-                        )
+                    # 执行拼接
+                    concat_tiles(
+                        tile_dir=time_dir,
+                        output_path=output_path,  # type: ignore
+                        tile_size=tile_size,
+                        rotate_deg=rotate,
+                        show_coords=show_coords
+                    )
 
     logger.info("所有拼接任务已完成")
 
