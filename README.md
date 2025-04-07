@@ -66,7 +66,7 @@ zec process-video -i mosaics/msg-iodc/5 -d 24
 zec process-api -h 24 -z 4
 zec process-concat -h 24
 zec process-blend
-zec process-video -i lighter_blend/4/ -h 24
+zec process-video -i lighter_blend/4/ -d 24
 ```
 ## Running Tests
 

@@ -81,25 +81,23 @@ def process_blend(
         file_okay=False,
         dir_okay=True
     ),
-    # tiles_dir is no longer needed for this approach
-    # tiles_dir: str = typer.Option(
-    #     "downloads",
-    #     "--tiles-dir", "-t",
-    #     help="包含原始瓦片图像的目录",
-    #     exists=True,
-    #     file_okay=False,
-    #     dir_okay=True
-    # ),
     output_filename: str = typer.Option(
         "lighter_blend", # Default output directory
         "--output-dir", "-o",
         help="输出混合图像序列的根目录"
+    ),
+    hours: int = typer.Option(
+        0,
+        "--hours", "-h",
+        min=0,
+        help="仅处理最新N小时内的数据（0表示不限制），默认0小时"
     )
 ) -> None:
     """
     扫描mosaics，为每个唯一时间戳生成一个混合图像。
     图像按时间倒序生成，如果卫星在某个时间点无数据，则使用其之前最新的数据。
     使用 'lighter' 模式混合，并根据预设X偏移量放置。
+    可通过--hours参数限制只处理最近N小时的数据。
     """
     logger.info(f"开始扫描 mosaics 目录查找所有图像信息: {mosaics_dir}")
     mosaics_base_path = Path(mosaics_dir)
@@ -150,7 +148,22 @@ def process_blend(
         logger.error("未能从收集到的文件中提取任何有效时间戳。")
         raise typer.Exit(code=1)
 
-    sorted_unique_timestamps = sorted(list(all_timestamps), reverse=True) # Newest first
+    # 获取当前UTC时间用于过滤
+    now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+    
+    # 应用时间过滤
+    filtered_timestamps = []
+    for ts in all_timestamps:
+        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+        time_diff = now_utc - dt.replace(tzinfo=None)
+        if hours == 0 or time_diff.total_seconds() <= hours * 3600:
+            filtered_timestamps.append(ts)
+
+    if not filtered_timestamps:
+        logger.error(f"在指定的 {hours} 小时时间范围内没有找到任何有效时间戳。")
+        raise typer.Exit(code=1)
+
+    sorted_unique_timestamps = sorted(filtered_timestamps, reverse=True) # Newest first
     logger.info(f"共找到 {len(sorted_unique_timestamps)} 个唯一时间戳，将从最新开始处理。")
 
     # --- 4. 定义X偏移量 ---
