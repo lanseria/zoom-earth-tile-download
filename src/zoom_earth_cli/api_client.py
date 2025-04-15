@@ -2,15 +2,14 @@ import os
 import json
 import logging
 import requests
-import time
 from pprint import pprint
 from datetime import datetime, timezone
 from typing import Tuple, Optional, List
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from zoom_earth_cli.const import get_ranges_for_zoom
-from zoom_earth_cli.utils import generate_black_tile, load_blacklist, save_blacklist, process_latest_times, filter_timestamps_by_hours
+from zoom_earth_cli.const import get_satellite_tile_range
+from zoom_earth_cli.utils import filter_timestamps_by_hours
 
 
 # 初始化模块级 logger
@@ -199,7 +198,6 @@ def batch_download(
         return
     
     filtered_times = {k: v for k, v in latest_times.items() if k in satellites}
-    blacklist = load_blacklist() 
 
     # 阶段1: 预处理
     tasks = []
@@ -207,27 +205,19 @@ def batch_download(
 
     for satellite in filtered_times:
         pre_stats[satellite] = {}
-        x_range, y_range = get_ranges_for_zoom(zoom, satellite)
+        x_range, y_range = get_satellite_tile_range(zoom, satellite)
         for timestamp in filtered_times[satellite]:
             all_coords = [(x, y) for x in x_range for y in y_range]
-            # 获取当前卫星当前zoom的黑名单坐标
-            zoom_bl = blacklist.get(satellite, {}).get(zoom, set())
-            skip_coords = {(x, y) for x, y in all_coords if (x, y) in zoom_bl}
             
-            # 生成黑瓷砖
-            for x, y in skip_coords:
-                generate_black_tile(satellite, timestamp, x, y, zoom)
             
             # 记录预处理数据
             pre_stats[satellite][timestamp] = {
                 'total': len(all_coords),
-                'skipped': len(skip_coords),
-                'downloadable': len(all_coords) - len(skip_coords)
             }
             
             # 生成下载任务
             tasks.extend([(satellite, timestamp, x, y) 
-                        for x, y in all_coords if (x, y) not in skip_coords])
+                        for x, y in all_coords if (x, y)])
 
     # 阶段2: 批量并行下载
     def _download_wrapper(args):
@@ -257,13 +247,6 @@ def batch_download(
             new_black[satellite][zoom].add((x, y))  # 关联当前zoom
             result_stats[satellite][timestamp]['new_black'] += 1
 
-    # 更新黑名单（支持zoom层级）
-    for sat in new_black:
-        for z in new_black[sat]:
-            # 合并当前zoom的黑名单
-            blacklist.setdefault(sat, {}).setdefault(z, set()).update(new_black[sat][z])
-    save_blacklist(blacklist)  # 使用新的保存方法
-
     # 阶段4: 失败任务重试
     failed_tasks = []
     for satellite, timestamp, success, is_black, x, y in results:
@@ -290,7 +273,7 @@ def batch_download(
 
     # 阶段5: 生成统计报告
     for satellite in filtered_times:
-        sat_total = sat_success = sat_skipped = sat_failed = sat_new_black = 0
+        sat_total = sat_success = sat_failed = sat_new_black = 0
         
         for timestamp in filtered_times[satellite]:
             # 获取预处理数据
@@ -301,16 +284,13 @@ def batch_download(
             # 累加卫星统计
             sat_total += pre['total']
             sat_success += res.get('success',0)
-            sat_skipped += pre['skipped']
             sat_failed += res.get('failed',0)
-            sat_new_black += res.get('new_black',0)
 
         # 生成卫星汇总日志
         logging.info(f"\n卫星 {satellite} 汇总:")
         logging.info(f"处理时间点: {len(filtered_times[satellite])}")
         logging.info(f"总处理区域: {sat_total}")
-        logging.info(f"成功率: {sat_success/(sat_total - sat_skipped)*100:.1f}% [成功{sat_success}/尝试{sat_total - sat_skipped}]")
-        logging.info(f"新增黑名单数: {sat_new_black}")
+        logging.info(f"成功率: {sat_success/(sat_total)*100:.1f}% [成功{sat_success}/尝试{sat_total}]")
         if sat_failed > 0:
             logging.info(f"失败任务数: {sat_failed} (已重试)")
 
@@ -402,9 +382,3 @@ def download_tile_by_rule(satellite: str, timestamp: int, x: int, y: int, zoom: 
             os.remove(temp_file)
         return False
 
-def _download_wrapper_by_rule(args):
-    """包装下载任务（用于线程池）"""
-    satellite, timestamp, x, y, zoom = args
-    success = download_tile_by_rule(satellite, timestamp, x, y, zoom)
-    # Return satellite and timestamp too for potential analysis
-    return (satellite, timestamp, success, x, y)

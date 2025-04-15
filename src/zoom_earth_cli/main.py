@@ -11,9 +11,8 @@ import time # 导入 time 模块
 
 from zoom_earth_cli.ffmpeg import generate_timelapse
 from zoom_earth_cli.api_client import batch_download, all_download
-# No longer need get_ranges_for_zoom for this function's core logic
-from zoom_earth_cli.utils import concat_tiles, smart_feather_alpha
-# from zoom_earth_cli.const import get_ranges_for_zoom # Removed import
+from zoom_earth_cli.utils import concat_tiles
+from zoom_earth_cli.const import get_satellite_tile_range
 
 
 app = typer.Typer(help="Zoom Earth CLI")
@@ -70,7 +69,6 @@ def process_video(
         typer.secho(f"生成失败: {str(e)}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-
 @app.command(name="process-blend")
 def process_blend(
     mosaics_dir: str = typer.Option(
@@ -91,6 +89,11 @@ def process_blend(
         "--hours", "-h",
         min=0,
         help="仅处理最新N小时内的数据（0表示不限制），默认0小时"
+    ),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        help="强制覆盖已存在的输出文件"
     )
 ) -> None:
     """
@@ -180,11 +183,11 @@ def process_blend(
     # Add msg-zero temporarily for conflict resolution step
     all_possible_satellites = relevant_satellites + ['msg-zero']
 
-
     # --- 5. 遍历唯一时间戳，生成混合图像 ---
     canvas_width = 4096
     canvas_height = 2048
     total_images_generated = 0
+    total_images_skipped = 0
 
     for target_ts in sorted_unique_timestamps:
         target_dt = datetime.fromtimestamp(target_ts, tz=timezone.utc)
@@ -195,10 +198,11 @@ def process_blend(
         output_dir_for_ts = output_base_dir / str(zoom_level) / target_date_str
         output_path = output_dir_for_ts / f"{target_time_str}.png"
 
-        # Optional: Skip if already exists? For now, let's overwrite.
-        # if output_path.exists():
-        #     logger.debug(f"图像已存在，跳过: {output_path}")
-        #     continue
+        # 检查文件是否已存在
+        if not overwrite and output_path.exists():
+            logger.debug(f"图像已存在，跳过: {output_path}")
+            total_images_skipped += 1
+            continue
 
         logger.info(f"--- 开始为时间戳 {target_ts} ({target_dt.isoformat()}) 生成混合图像 ---")
 
@@ -232,47 +236,45 @@ def process_blend(
                 logger.debug("  冲突解决: msg-zero > mtg-zero, 使用 msg-zero (作为 mtg-zero)")
                 final_images_to_blend['mtg-zero'] = msg_path # Use mtg-zero key for offset
         elif mtg_path:
-             final_images_to_blend['mtg-zero'] = mtg_path
+            final_images_to_blend['mtg-zero'] = mtg_path
         elif msg_path:
-             logger.debug("  冲突解决: 只有 msg-zero, 使用 msg-zero (作为 mtg-zero)")
-             final_images_to_blend['mtg-zero'] = msg_path # Use mtg-zero key for offset
+            logger.debug("  冲突解决: 只有 msg-zero, 使用 msg-zero (作为 mtg-zero)")
+            final_images_to_blend['mtg-zero'] = msg_path # Use mtg-zero key for offset
 
         # Add other relevant satellites
         for sat_id in relevant_satellites:
             if sat_id != 'mtg-zero' and sat_id in images_to_use_for_ts:
-                 final_images_to_blend[sat_id] = images_to_use_for_ts[sat_id]
-
+                final_images_to_blend[sat_id] = images_to_use_for_ts[sat_id]
 
         # --- 5d. 创建画布并混合 ---
         if not final_images_to_blend:
-             logger.warning(f"时间戳 {target_ts}: 没有找到任何可用的卫星图像进行混合。")
-             continue
+            logger.warning(f"时间戳 {target_ts}: 没有找到任何可用的卫星图像进行混合。")
+            continue
 
         current_canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0)) # Transparent
         processed_count_for_ts = 0
 
         # Blend relevant satellites using their determined paths and offsets
         for satellite_id, image_path in final_images_to_blend.items():
-             offset_x = satellite_offsets.get(satellite_id)
-             if offset_x is None:
-                 logger.warning(f"  内部错误: 卫星 {satellite_id} 缺少偏移量定义。")
-                 continue
+            offset_x = satellite_offsets.get(satellite_id)
+            if offset_x is None:
+                logger.warning(f"  内部错误: 卫星 {satellite_id} 缺少偏移量定义。")
+                continue
 
-             if image_path.exists():
-                 try:
-                     with Image.open(image_path) as mosaic_img:
-                         mosaic_img = mosaic_img.convert("RGBA")
-                         temp_canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
-                         paste_position = (offset_x, 0)
-                         temp_canvas.paste(mosaic_img, paste_position, mosaic_img)
-                         current_canvas = ImageChops.lighter(current_canvas, temp_canvas)
-                         processed_count_for_ts += 1
-                         logger.debug(f"    -> 已混合 {satellite_id} 从 {image_path.name}")
-                 except Exception as e:
-                     logger.error(f"    -> 打开或混合图像失败 {image_path}: {e}")
-             else:
-                 logger.warning(f"    -> 文件未找到（预期存在）: {image_path}")
-
+            if image_path.exists():
+                try:
+                    with Image.open(image_path) as mosaic_img:
+                        mosaic_img = mosaic_img.convert("RGBA")
+                        temp_canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
+                        paste_position = (offset_x, 0)
+                        temp_canvas.paste(mosaic_img, paste_position, mosaic_img)
+                        current_canvas = ImageChops.lighter(current_canvas, temp_canvas)
+                        processed_count_for_ts += 1
+                        logger.debug(f"    -> 已混合 {satellite_id} 从 {image_path.name}")
+                except Exception as e:
+                    logger.error(f"    -> 打开或混合图像失败 {image_path}: {e}")
+            else:
+                logger.warning(f"    -> 文件未找到（预期存在）: {image_path}")
 
         # --- 5e. 保存当前时间戳的图像 ---
         if processed_count_for_ts > 0:
@@ -285,6 +287,9 @@ def process_blend(
                 logger.error(f"  -> 保存混合图像失败 {output_path}: {e}")
         else:
              logger.warning(f"时间戳 {target_ts}: 处理了0个图像，未保存。")
+
+    # 添加最终统计信息
+    logger.info(f"处理完成。共生成 {total_images_generated} 个混合图像，跳过 {total_images_skipped} 个已存在的图像。")
 
 
     # --- 6. 完成总结 ---
@@ -573,10 +578,11 @@ def process_all(
         logger.debug(traceback.format_exc())
         print(Panel(f"[bold red]API 处理错误: {str(e)}[/]", title="严重错误"))
 
-@app.command(name="legacy-process-api")
-def legacy_process_from_api():
-    """兼容旧版计算命令"""
-    process_from_api() # 直接调用新的函数
+@app.command(name="test")
+def test():
+    x_range, y_range = get_satellite_tile_range(zoom=4, satellite="himawari")
+    print(f"X Range: {x_range}")
+    print(f"Y Range: {y_range}")
 
 if __name__ == "__main__":
     app()
