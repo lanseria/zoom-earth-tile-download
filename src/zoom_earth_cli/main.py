@@ -7,11 +7,12 @@ from typing import List, Optional, Dict
 import traceback
 from datetime import datetime, timezone
 from PIL import Image, ImageChops
+import traceback
 
 from zoom_earth_cli.ffmpeg import generate_timelapse
 from zoom_earth_cli.api_client import batch_download
 from zoom_earth_cli.utils import concat_tiles
-from zoom_earth_cli.const import get_satellite_tile_range
+from zoom_earth_cli.const import get_satellite_tile_range, COUNTRY_BOUNDS
 
 app = typer.Typer(help="Zoom Earth CLI")
 
@@ -414,7 +415,7 @@ def process_from_api(
     satellites: List[str] = typer.Option(
         None,
         "--satellites", "-s",
-        help="选择卫星列表（空格分隔），例如 goes-east goes-west himawari, msg-iodc, msg-zero, mtg-zer, 默认全部卫星"
+        help="选择卫星列表（空格分隔），例如 goes-east goes-west himawari, msg-iodc, msg-zero, mtg-zero, 默认全部卫星"
     ),
     hours: int = typer.Option(
         1,
@@ -427,18 +428,36 @@ def process_from_api(
         "--zoom", "-z",
         min=4, max=5,
         help="zoom级别 (4或5)，默认4"
+    ),
+    country: str = typer.Option(
+        None,
+        "--country",
+        help="按国家边界筛选（可选: usa, canada, china, india, brazil, australia, russia, japan, france, germany）"
     )
 ):
-    """主流程（支持卫星选择和时间过滤）"""
+    """主流程（支持卫星选择、时间过滤和国家边界筛选）"""
     try:
-        logger.info(f"启动下载任务 | 并发数: {concurrency} | 卫星: {satellites or '全部'} | 时间范围: {hours}小时")
+        # 构建日志信息
+        log_info = [
+            f"启动下载任务 | 并发数: {concurrency}",
+            f"卫星: {satellites or '全部'}",
+            f"时间范围: {hours}小时",
+            f"国家: {country or '全球'}"
+        ]
+        logger.info(" | ".join(log_info))
+        
         batch_download(
             concurrency=concurrency,
             satellites=satellites,
             hours=hours,
-            zoom=zoom
+            zoom=zoom,
+            country=country
         )
         print(Panel("[bold green]所有任务完成![/]", title="完成通知"))
+    except ValueError as e:
+        # 处理国家参数错误
+        logger.error(f"参数错误: {str(e)}")
+        traceback.print_exc()
     except Exception as e:
         logger.error(f"严重错误: {str(e)}")
         logger.debug(traceback.format_exc())

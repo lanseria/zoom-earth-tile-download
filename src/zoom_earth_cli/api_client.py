@@ -8,7 +8,7 @@ from typing import Tuple, Optional, List
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from zoom_earth_cli.const import get_satellite_tile_range
+from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, range_intersection, COUNTRY_BOUNDS
 from zoom_earth_cli.utils import filter_timestamps_by_hours
 
 
@@ -178,16 +178,24 @@ def batch_download(
         concurrency: int = 5,
         satellites: Optional[List[str]] = None,
         hours: int = 2,
-        zoom: int = 4
+        zoom: int = 4,
+        country: Optional[str] = None
     ):
-    """批量下载主逻辑（包含黑名单过滤）优化版
+    """批量下载主逻辑（包含黑名单过滤和国家边界筛选）
     
     Args:
         concurrency: 并发线程数，默认5
         satellites: 要处理的卫星列表，默认全部
         hours: 仅处理最新N小时内的数据，0表示不限制
         zoom: zoom级别，默认为4
+        country: 国家名称，从COUNTRY_BOUNDS中选择，None表示全球
     """
+
+    # 国家边界检查
+    if country is not None:
+        if country not in COUNTRY_BOUNDS:
+            raise ValueError(f"国家 '{country}' 不在预定义列表中，可选: {list(COUNTRY_BOUNDS.keys())}")
+        logging.info(f"将下载 {country} 范围内的卫星贴图")
 
     if satellites is None:
         satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
@@ -202,13 +210,43 @@ def batch_download(
     # 阶段1: 预处理
     tasks = []
     pre_stats = defaultdict(lambda: defaultdict(dict))
+    
+    # 获取国家边界对应的瓦片范围
+    if country is not None:
+        country_bounds = COUNTRY_BOUNDS[country]
+        c_x_range, c_y_range = get_bound_tile_range(zoom, country_bounds)
+    else:
+        # 如果没有指定国家，则下载所有瓦片
+        c_x_range, c_y_range = None, None
 
     for satellite in filtered_times:
         pre_stats[satellite] = {}
         x_range, y_range = get_satellite_tile_range(zoom, satellite)
-        for timestamp in filtered_times[satellite]:
-            all_coords = [(x, y) for x in x_range for y in y_range]
+        
+        # 计算卫星瓦片范围与国家范围的交集
+        if country is not None:
+            # 计算x轴的交集
+            x_min = max(min(x_range), min(c_x_range))
+            x_max = min(max(x_range), max(c_x_range))
+            # 计算y轴的交集
+            y_min = max(min(y_range), min(c_y_range))
+            y_max = min(max(y_range), max(c_y_range))
             
+            # 检查是否有交集
+            if x_min > x_max or y_min > y_max:
+                logging.info(f"卫星 {satellite} 的瓦片范围与国家 {country} 无交集，跳过下载")
+                continue
+                
+            # 生成交集范围内的瓦片坐标
+            valid_x_range = range(x_min, x_max + 1)
+            valid_y_range = range(y_min, y_max + 1)
+        else:
+            # 没有国家限制，下载所有瓦片
+            valid_x_range = x_range
+            valid_y_range = y_range
+
+        for timestamp in filtered_times[satellite]:
+            all_coords = [(x, y) for x in valid_x_range for y in valid_y_range]
             
             # 记录预处理数据
             pre_stats[satellite][timestamp] = {
@@ -277,7 +315,7 @@ def batch_download(
         
         for timestamp in filtered_times[satellite]:
             # 获取预处理数据
-            pre = pre_stats[satellite][timestamp]
+            pre = pre_stats.get(satellite, {}).get(timestamp, {'total': 0})
             # 获取结果数据
             res = result_stats[satellite][timestamp]
             
@@ -290,7 +328,8 @@ def batch_download(
         logging.info(f"\n卫星 {satellite} 汇总:")
         logging.info(f"处理时间点: {len(filtered_times[satellite])}")
         logging.info(f"总处理区域: {sat_total}")
-        logging.info(f"成功率: {sat_success/(sat_total)*100:.1f}% [成功{sat_success}/尝试{sat_total}]")
+        if sat_total > 0:
+            logging.info(f"成功率: {sat_success/(sat_total)*100:.1f}% [成功{sat_success}/尝试{sat_total}]")
         if sat_failed > 0:
             logging.info(f"失败任务数: {sat_failed} (已重试)")
 

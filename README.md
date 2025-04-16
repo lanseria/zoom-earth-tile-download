@@ -38,7 +38,6 @@ pip install -e ".[test]"
 
 ## Usage
 
-Add two numbers:
 ```bash
 #
 zec process-api -h 24 -z 4
@@ -46,6 +45,16 @@ zec process-concat -h 24
 zec process-blend -h 24
 zec process-video -i lighter_blend/4/ -h 24
 ```
+
+
+```bash
+#
+zec process-api -h 12 -z 4 --country usa
+zec process-concat -h 12
+zec process-blend -h 12
+zec process-video -i lighter_blend/4/ -h 12
+```
+
 ## Running Tests
 
 ```bash

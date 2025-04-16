@@ -7,10 +7,7 @@ import platform
 from PIL import Image, ImageDraw, ImageFont
 from typing import Dict, List, Optional, Any
 import numpy as np
-from typing import Dict, Set, Tuple
-from collections import defaultdict
-
-from zoom_earth_cli.const import BLACKLIST_PATH
+from typing import Dict, Set
 
 def get_system_font():
     """获取系统默认字体"""
@@ -60,47 +57,6 @@ def draw_tile_info(draw, position, text, tile_size):
         fill="white",
         font=font
     )
-
-def load_blacklist() -> Dict[str, Dict[int, Set[Tuple[int, int]]]]:
-    """加载黑名单配置，返回格式: {satellite: {zoom: set((x,y))}}"""
-    if not os.path.exists(BLACKLIST_PATH):
-        return defaultdict(lambda: defaultdict(set))
-    
-    try:
-        with open(BLACKLIST_PATH, 'r') as f:
-            raw = json.load(f)
-        
-        # 使用双重默认字典结构
-        blacklist = defaultdict(lambda: defaultdict(set))
-        
-        for sat, zoom_data in raw.items():
-            for zoom_str, coords in zoom_data.items():
-                zoom = int(zoom_str)
-                # 将列表转换为元组集合
-                blacklist[sat][zoom] = {tuple(coord) for coord in coords}
-        
-        return blacklist
-    
-    except Exception as e:
-        logging.error(f"加载黑名单失败：{e}")
-        # 保持结构一致性，返回双重默认字典
-        return defaultdict(lambda: defaultdict(set))
-
-def save_blacklist(blacklist: Dict[str, Dict[int, Set[Tuple[int, int]]]]):
-    """保存支持zoom层级的黑名单配置"""
-    # 转换为可序列化的字典结构
-    serializable = defaultdict(dict)
-    
-    for sat, zoom_data in blacklist.items():
-        for zoom, coords in zoom_data.items():
-            # 将元组集合转换为列表的列表，zoom转换为字符串作为key
-            serializable[sat][str(zoom)] = [list(c) for c in coords]
-    
-    try:
-        with open(BLACKLIST_PATH, 'w') as f:
-            json.dump(serializable, f, indent=2)
-    except Exception as e:
-        logging.error(f"保存黑名单失败：{e}")
 
 def get_tile_path(satellite: str, timestamp: str, x: int, y: int, zoom: int) -> str:
     """生成图片存储路径（示例）"""
