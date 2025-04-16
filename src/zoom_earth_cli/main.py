@@ -12,7 +12,8 @@ import traceback
 from zoom_earth_cli.ffmpeg import generate_timelapse
 from zoom_earth_cli.api_client import batch_download
 from zoom_earth_cli.utils import concat_tiles
-from zoom_earth_cli.const import get_satellite_tile_range, COUNTRY_BOUNDS
+from zoom_earth_cli.blender import process_blend_core
+from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, calculate_canvas_size, COUNTRY_BOUNDS
 
 app = typer.Typer(help="Zoom Earth CLI")
 
@@ -67,11 +68,12 @@ def process_video(
         typer.secho(f"生成失败: {str(e)}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=1)
 
-@app.command(name="process-blend")
-def process_blend(
+
+@app.command(name="blend")
+def blend(
     mosaics_dir: str = typer.Option(
         "mosaics",
-        "--mosaics-dir", "-m",
+        "--input", "-i",
         help="包含拼接后卫星图像的目录",
         exists=True,
         file_okay=False,
@@ -79,6 +81,64 @@ def process_blend(
     ),
     output_filename: str = typer.Option(
         "lighter_blend", # Default output directory
+        "--output-dir", "-o",
+        help="输出混合图像序列的根目录"
+    ),
+    country: str = typer.Option(
+        "global",
+        "--country", "-c",
+        help="指定国家，默认为全球范围"
+    ),
+    zoom_level: int = typer.Option(
+        4,
+        "--zoom", "-z",
+        min=4, max=5,
+        help="zoom级别 (4或5)，默认4"
+    ),
+    hours: int = typer.Option(
+        0,
+        "--hours", "-h",
+        min=0,
+        help="仅处理最新N小时内的数据（0表示不限制），默认0小时"
+    ),
+) -> None:
+    """
+    扫描mosaics，为每个唯一时间戳生成一个混合图像。
+    图像按时间倒序生成，如果卫星在某个时间点无数据，则使用其之前最新的数据。
+    使用 'lighter' 模式混合，并根据预设X偏移量放置。
+    可通过--hours参数限制只处理最近N小时的数据。
+    """
+    country_bounds = COUNTRY_BOUNDS[country]
+    c_x_range, c_y_range = get_bound_tile_range(zoom=zoom_level, bound=country_bounds)
+    print(f"国家: {country} | X范围: {c_x_range} | Y范围: {c_y_range}")
+    canvas_width, canvas_height = calculate_canvas_size(c_x_range, c_y_range)
+    if country == "china":
+        process_blend_core(
+            canvas_height=canvas_height,
+            canvas_width=canvas_width,
+            mosaics_dir=mosaics_dir,    
+            output_base_dir=output_filename,
+            hours=hours,
+            logger=logger,
+            satellite_offsets={
+                "msg-iodc": 0,
+                "himawari": 1
+            },
+            zoom_level=zoom_level,
+        )
+
+@app.command(name="process-blend")
+def process_blend(
+    mosaics_dir: str = typer.Option(
+        "mosaics/global",
+        "--input", "-i",
+        help="包含拼接后卫星图像的目录",
+        exists=True,
+        file_okay=False,
+        dir_okay=True
+    ),
+    output_filename: str = typer.Option(
+        "lighter_blend/global", # Default output directory
         "--output-dir", "-o",
         help="输出混合图像序列的根目录"
     ),
@@ -297,13 +357,19 @@ def process_blend(
     else:
         logger.warning("任务完成，但没有生成任何混合图像。")
 
-    # No return value needed
-
 
 @app.command(name="process-concat")
 def process_concat(
-    input_dir: str = typer.Option("downloads", help="原始瓦片目录"),
-    output_dir: str = typer.Option("mosaics", help="拼接结果目录"),
+    input_dir: str = typer.Option(
+        "downloads/global",
+        "--input", "-i",
+        help="原始瓦片目录"
+    ),
+    output_dir: str = typer.Option(
+        "mosaics/global",
+        "--output", "-o",
+        help="拼接结果目录"
+    ),
     tile_size: int = typer.Option(256, min=128, max=512, help="瓦片像素尺寸"),
     rotate: int = typer.Option(0, help="瓦片旋转角度 (0/90/180/270)"),
     show_coords: bool = typer.Option(False, "--show-coords/--no-coords", help="是否显示瓦片坐标信息"),
@@ -387,8 +453,8 @@ def process_concat(
                     # 生成输出路径（包含zoom级别）
                     output_path = (
                         Path(output_dir)
-                        / satellite.name
                         / zoom_dir.name # 添加 zoom 级别
+                        / satellite.name
                         / date_dir.name
                         / f"{time_dir.name}.png"
                     )

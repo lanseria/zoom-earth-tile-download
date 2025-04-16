@@ -50,8 +50,17 @@ zec process-video -i lighter_blend/4/ -h 24
 ```bash
 #
 zec process-api -h 12 -z 4 --country usa
-zec process-concat -h 12
-zec process-blend -h 12
+zec process-concat -h 12 -i downloads/usa/ -o mosaics/usa/
+zec process-blend -h 12 -i mosaics/usa/ -o lighter_blend/global/
+zec process-video -i lighter_blend/4/ -h 12
+```
+
+```bash
+#
+zec process-api -h 12 -z 4 --country china
+zec process-concat -h 12 -i downloads/china/ -o mosaics/china/
+zec blend -h 12 -c china -z 4
+zec process-blend -h 12 -i mosaics/china/ -o lighter_blend/china/
 zec process-video -i lighter_blend/4/ -h 12
 ```
 

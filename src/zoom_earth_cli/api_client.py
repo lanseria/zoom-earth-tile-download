@@ -8,7 +8,7 @@ from typing import Tuple, Optional, List
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, range_intersection, COUNTRY_BOUNDS
+from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, COUNTRY_BOUNDS
 from zoom_earth_cli.utils import filter_timestamps_by_hours
 
 
@@ -116,7 +116,7 @@ def get_latest_times(hours: int = 2):
         )
     return {}
 
-def download_tile(satellite: str, timestamp: int, x: int, y: int, zoom: int = 4) -> Tuple[bool, bool]:
+def download_tile(country: str, satellite: str, timestamp: int, x: int, y: int, zoom: int = 4) -> Tuple[bool, bool]:
     """下载单个贴图，返回（是否成功，是否黑图）
     
     Args:
@@ -133,7 +133,7 @@ def download_tile(satellite: str, timestamp: int, x: int, y: int, zoom: int = 4)
         
         # 构建 URL 和文件路径
         url = f"https://tiles.zoom.earth/geocolor/{satellite}/{date_str}/{time_str}/{zoom}/{x}/{y}.jpg"
-        save_dir = os.path.join("downloads", satellite, f"{zoom}", date_str, time_str)
+        save_dir = os.path.join("downloads", country, satellite, f"{zoom}", date_str, time_str)
         os.makedirs(save_dir, exist_ok=True)
         filename = os.path.join(save_dir, f"x{x}_y{y}.jpg")
         
@@ -190,13 +190,15 @@ def batch_download(
         zoom: zoom级别，默认为4
         country: 国家名称，从COUNTRY_BOUNDS中选择，None表示全球
     """
-
+    county_name = 'global'
     # 国家边界检查
     if country is not None:
+        county_name = country
         if country not in COUNTRY_BOUNDS:
             raise ValueError(f"国家 '{country}' 不在预定义列表中，可选: {list(COUNTRY_BOUNDS.keys())}")
         logging.info(f"将下载 {country} 范围内的卫星贴图")
-
+    else:
+        logging.info("将下载全球范围内的卫星贴图")
     if satellites is None:
         satellites = ["goes-east", "goes-west", "himawari", "msg-iodc", "msg-zero", "mtg-zero"]
 
@@ -260,7 +262,7 @@ def batch_download(
     # 阶段2: 批量并行下载
     def _download_wrapper(args):
         satellite, timestamp, x, y = args
-        success, is_black = download_tile(satellite, timestamp, x, y, zoom)
+        success, is_black = download_tile(county_name, satellite, timestamp, x, y, zoom)
         return (satellite, timestamp, success, is_black, x, y)
 
     results = []

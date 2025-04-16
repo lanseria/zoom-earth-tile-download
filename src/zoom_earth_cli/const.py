@@ -59,6 +59,12 @@ def get_bound_tile_range(zoom, bound):
     min_lon, min_lat, max_lon, max_lat = bound
     return get_tile_range_by_bound(zoom, min_lon, min_lat, max_lon, max_lat)
 
+def calculate_canvas_size(x_range: range, y_range: range, tile_size: int = 256) -> tuple[int, int]:
+    """计算拼接后的画布尺寸（宽度、高度）"""
+    width = (x_range.stop - x_range.start) * tile_size
+    height = (y_range.stop - y_range.start) * tile_size
+    return width, height
+
 # 定义拼接范围常量
 X_RANGE_CONCAT = range(0, 16)
 Y_RANGE_CONCAT = range(0, 16)
