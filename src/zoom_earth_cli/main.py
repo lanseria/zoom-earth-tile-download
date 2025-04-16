@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from PIL import Image, ImageChops
 
 from zoom_earth_cli.ffmpeg import generate_timelapse
-from zoom_earth_cli.api_client import batch_download, all_download
+from zoom_earth_cli.api_client import batch_download
 from zoom_earth_cli.utils import concat_tiles
 from zoom_earth_cli.const import get_satellite_tile_range
 
