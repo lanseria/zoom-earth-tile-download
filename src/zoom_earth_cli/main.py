@@ -11,7 +11,7 @@ import traceback
 from zoom_earth_cli.ffmpeg import generate_timelapse
 from zoom_earth_cli.api_client import batch_download
 from zoom_earth_cli.blender import process_blend_core
-from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, calculate_canvas_size, COUNTRY_BOUNDS
+from zoom_earth_cli.const import get_satellite_tile_range, get_bound_tile_range, calculate_canvas_size, COUNTRY_BOUNDS, SATELLITE_OFFSETS
 from zoom_earth_cli.concat import process_concat_core
 
 app = typer.Typer(help="Zoom Earth CLI")
@@ -122,10 +122,7 @@ def blend(
         output_base_dir=output_filename,
         hours=hours,
         logger=logger,
-        satellite_offsets={
-            "msg-iodc": 0,
-            "himawari": 1,
-        },
+        satellite_offsets=SATELLITE_OFFSETS.get(country, SATELLITE_OFFSETS["default"]),
         zoom_level=zoom_level,
     )
 
@@ -170,13 +167,7 @@ def process_blend(
         output_base_dir=output_filename,
         hours=hours,
         logger=logger,
-        satellite_offsets={
-            "goes-west": 0 * 256,
-            "goes-east": 2 * 256,
-            "mtg-zero": 6 * 256,
-            "msg-iodc": 9 * 256,
-            "himawari": 11 * 256,
-        },
+        satellite_offsets=SATELLITE_OFFSETS["global"],
         zoom_level=4,
         overwrite=overwrite
     )

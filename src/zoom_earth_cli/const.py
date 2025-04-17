@@ -24,6 +24,33 @@ COUNTRY_BOUNDS = {
     "germany": (5.9, 47.3, 15.0, 54.9),       # 德国
 }
 
+# 各国家对应的卫星偏移配置
+SATELLITE_OFFSETS = {
+    "china": {
+        "msg-iodc": 0,
+        "himawari": 1,
+    },
+    "global": {
+        "goes-west": 0,
+        "goes-east": 2,
+        "mtg-zero": 6,
+        "msg-iodc": 9,
+        "himawari": 11,
+    },
+    # 你可以继续添加其他国家的配置
+    "usa": {
+        "goes-east": 0,
+        "goes-west": 0,
+    },
+    "default": {
+        "goes-west": 0,
+        "goes-east": 2,
+        "mtg-zero": 6,
+        "msg-iodc": 9,
+        "himawari": 11,
+    }
+}
+
 def range_intersection(a_range, b_range):
     """返回两个闭区间的交集，若无交集返回 None"""
     a_min, a_max = a_range
