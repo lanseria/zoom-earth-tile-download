@@ -60,12 +60,29 @@ zec process-concat -h 12 -i downloads/china/ -o mosaics/china/
 zec blend -h 12 -c china -z 5
 zec process-video -i lighter_blend/china/5/ -h 12
 ```
+
 ```bash
 # z 5 usa
 zec process-api -h 12 -z 5 --country usa
 zec process-concat -h 12 -i downloads/usa/ -o mosaics/usa/
 zec blend -h 12 -c usa -z 5
 zec process-video -i lighter_blend/usa/5/ -h 12
+```
+
+```bash
+# z 5 australia
+zec process-api -h 12 -z 5 --country australia
+zec process-concat -h 12 -i downloads/australia/ -o mosaics/australia/
+zec blend -h 12 -c australia -z 5
+zec process-video -i lighter_blend/australia/5/ -h 12
+```
+
+```bash
+# z 5 japan
+zec process-api -h 12 -z 5 --country japan
+zec process-concat -h 12 -i downloads/japan/ -o mosaics/japan/
+zec blend -h 12 -c japan -z 5
+zec process-video -i lighter_blend/japan/5/ -h 12
 ```
 ## Running Tests
 

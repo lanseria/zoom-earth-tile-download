@@ -30,6 +30,12 @@ SATELLITE_OFFSETS = {
         "msg-iodc": 0,
         "himawari": 1,
     },
+    "australia": {
+        "himawari": 0,
+    },
+    "japan": {
+        "himawari": 0,
+    },
     "global": {
         "goes-west": 0,
         "goes-east": 2,
