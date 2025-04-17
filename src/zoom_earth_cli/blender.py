@@ -12,6 +12,7 @@ def process_blend_core(
     satellite_offsets: Dict[str, int],
     logger,
     zoom_level: int = 4,
+    overwrite: bool = False,
 ):
     mosaics_base_path = Path(mosaics_dir)
     output_base_dir = Path(output_base_dir)
