@@ -40,19 +40,10 @@ pip install -e ".[test]"
 
 ```bash
 #
-zec process-api -h 24 -z 4
-zec process-concat -h 24
-zec process-blend -h 24
-zec process-video -i lighter_blend/4/ -h 24
-```
-
-
-```bash
-#
-zec process-api -h 12 -z 4 --country usa
-zec process-concat -h 12 -i downloads/usa/ -o mosaics/usa/
-zec process-blend -h 12 -i mosaics/usa/ -o lighter_blend/global/
-zec process-video -i lighter_blend/4/ -h 12
+zec process-api -h 12 -z 4
+zec process-concat -h 12 -i downloads/global/ -o mosaics/global/
+zec process-blend -h 12
+zec process-video -i lighter_blend/global/4/ -h 12
 ```
 
 ```bash
