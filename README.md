@@ -56,14 +56,19 @@ zec process-video -i lighter_blend/4/ -h 12
 ```
 
 ```bash
-#
+# z 4 china
 zec process-api -h 12 -z 4 --country china
 zec process-concat -h 12 -i downloads/china/ -o mosaics/china/
 zec blend -h 12 -c china -z 4
-zec process-blend -h 12 -i mosaics/china/ -o lighter_blend/china/
 zec process-video -i lighter_blend/china/4/ -h 12
 ```
-
+```bash
+# z 5 china
+zec process-api -h 12 -z 5 --country china
+zec process-concat -h 12 -i downloads/china/ -o mosaics/china/
+zec blend -h 12 -c china -z 5
+zec process-video -i lighter_blend/china/5/ -h 12
+```
 ## Running Tests
 
 ```bash
