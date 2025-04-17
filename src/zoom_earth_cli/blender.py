@@ -130,17 +130,21 @@ def process_blend_core(
         processed_count_for_ts = 0
 
         for satellite_id, image_path in final_images_to_blend.items():
-            offset_x = satellite_offsets.get(satellite_id)
-            if offset_x is None:
+            # 偏移量统一用 tile 数量 * tile_width
+            offset_tiles = satellite_offsets.get(satellite_id)
+            if offset_tiles is None:
                 logger.warning(f"  内部错误: 卫星 {satellite_id} 缺少偏移量定义。")
                 continue
+            offset_x = offset_tiles * tile_width
+
             if image_path.exists():
                 try:
                     with Image.open(image_path) as mosaic_img:
                         mosaic_img = mosaic_img.convert("RGBA")
+                        # temp_canvas 画布为全局画布大小
                         temp_canvas = Image.new("RGBA", (canvas_width, canvas_height), (0, 0, 0, 0))
-                        paste_position = (offset_x, 0)
-                        temp_canvas.paste(mosaic_img, paste_position, mosaic_img)
+                        temp_canvas.paste(mosaic_img, (offset_x, 0), mosaic_img)
+                        # lighter 混合
                         current_canvas = ImageChops.lighter(current_canvas, temp_canvas)
                         processed_count_for_ts += 1
                         logger.debug(f"    -> 已混合 {satellite_id} 从 {image_path.name}")

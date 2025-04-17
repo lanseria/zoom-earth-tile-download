@@ -124,7 +124,7 @@ def blend(
         logger=logger,
         satellite_offsets={
             "msg-iodc": 0,
-            "himawari": 1
+            "himawari": 1,
         },
         zoom_level=zoom_level,
     )
