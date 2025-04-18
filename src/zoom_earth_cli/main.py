@@ -110,7 +110,7 @@ def blend(
     country_bounds = COUNTRY_BOUNDS[country]
     c_x_range, c_y_range = get_bound_tile_range(zoom=zoom_level, bound=country_bounds)
     print(f"国家: {country} | X范围: {c_x_range} | Y范围: {c_y_range}")
-    canvas_width, canvas_height = calculate_canvas_size(c_x_range, c_y_range)
+    canvas_width, canvas_height = calculate_canvas_size(c_y_range, c_x_range)
 
     # 拼接 mosaics_dir 和 country
     mosaics_dir = str(Path(mosaics_dir) / country)
